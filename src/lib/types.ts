@@ -46,10 +46,11 @@ export interface ShippingRecord {
   id: string;
   date: string;
   carrier: string;
+  dayType: string; // '当日' | '両日'
   itemCount: number;
   points: number;
   inspector: string;
-  creator: string;
+  creator: string; // optional - empty means not yet completed
   createdAt: string;
 }
 

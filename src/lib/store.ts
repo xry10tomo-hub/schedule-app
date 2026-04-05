@@ -197,6 +197,7 @@ export const STORAGE_KEYS = {
   tasks: 'schedule_task_defs',
   currentUser: 'schedule_current_user',
   taskResources: 'schedule_task_resources',
+  timeline: 'schedule_timeline',
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -208,6 +209,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.shifts,
   STORAGE_KEYS.tasks,
   STORAGE_KEYS.taskResources,
+  STORAGE_KEYS.timeline,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {
@@ -281,6 +283,22 @@ export function getTaskResources(): TaskResource[] {
 }
 export function setTaskResources(resources: TaskResource[]) {
   setToStorage(STORAGE_KEYS.taskResources, resources);
+}
+
+// Timeline blocks: { [date]: { [memberId]: { [blockIndex]: taskId } } }
+export function getTimelineBlocks(): Record<string, Record<string, Record<string, string>>> {
+  return getFromStorage(STORAGE_KEYS.timeline, {});
+}
+export function setTimelineBlocks(data: Record<string, Record<string, Record<string, string>>>) {
+  setToStorage(STORAGE_KEYS.timeline, data);
+}
+export function getTimelineForDate(date: string): Record<string, Record<string, string>> {
+  return getTimelineBlocks()[date] || {};
+}
+export function setTimelineForDate(date: string, blocks: Record<string, Record<string, string>>) {
+  const all = getTimelineBlocks();
+  all[date] = blocks;
+  setTimelineBlocks(all);
 }
 
 export function getCurrentUser(): string {

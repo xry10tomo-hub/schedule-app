@@ -1,9 +1,42 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, getToday, exportToCSV, getMemberById, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
-import type { DailyTask, TaskDefinition } from '@/lib/types';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, getToday, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
+
+// Timeline constants
+const TIMELINE_START = 8; // 8:00
+const TIMELINE_END = 22; // 22:00
+const BLOCKS_PER_HOUR = 4; // 15-min blocks
+const TOTAL_BLOCKS = (TIMELINE_END - TIMELINE_START) * BLOCKS_PER_HOUR; // 56
+
+// Color palette for tasks
+const TASK_COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
+  '#e11d48', '#84cc16', '#0ea5e9', '#d946ef', '#fbbf24',
+  '#22c55e', '#a855f7', '#fb7185', '#2dd4bf', '#facc15',
+  '#78716c', '#64748b', '#0d9488', '#db2777', '#ea580c',
+  '#4f46e5', '#059669', '#dc2626', '#7c3aed', '#ca8a04',
+];
+
+function blockToTime(blockIndex: number): string {
+  const totalMinutes = TIMELINE_START * 60 + blockIndex * 15;
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}:${m.toString().padStart(2, '0')}`;
+}
+
+function isBlockInShift(blockIndex: number, shift: ShiftEntry | undefined): boolean {
+  if (!shift) return false;
+  const blockStart = TIMELINE_START * 60 + blockIndex * 15;
+  const [sh, sm] = shift.startTime.split(':').map(Number);
+  const [eh, em] = shift.endTime.split(':').map(Number);
+  const shiftStart = sh * 60 + sm;
+  const shiftEnd = eh * 60 + em;
+  return blockStart >= shiftStart && blockStart < shiftEnd;
+}
 
 export default function DailyPage() {
   const { members, currentUserId, dataVersion } = useAppContext();
@@ -12,7 +45,12 @@ export default function DailyPage() {
   const [showForm, setShowForm] = useState(false);
   const [taskDefs, setTaskDefsState] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [viewTab, setViewTab] = useState<'plan' | 'actual'>('plan');
-  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+
+  // Timeline state
+  const [timelineData, setTimelineDataState] = useState<Record<string, Record<string, string>>>({});
+  const [selectedPaintTask, setSelectedPaintTask] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
 
   // Form state
   const [formCategory, setFormCategory] = useState('');
@@ -27,6 +65,22 @@ export default function DailyPage() {
     return acc;
   }, {} as Record<string, TaskDefinition[]>);
 
+  // Build unique task name list for color mapping
+  const uniqueTaskNames = useMemo(() => {
+    const names = new Set<string>();
+    tasks.forEach(t => names.add(t.taskName));
+    // Also add tasks from timeline
+    Object.values(timelineData).forEach(memberBlocks => {
+      Object.values(memberBlocks).forEach(taskName => names.add(taskName));
+    });
+    return Array.from(names).sort();
+  }, [tasks, timelineData]);
+
+  function getTaskColor(taskName: string): string {
+    const idx = uniqueTaskNames.indexOf(taskName);
+    return idx >= 0 ? TASK_COLORS[idx % TASK_COLORS.length] : '#9ca3af';
+  }
+
   const syncMonthlyTasks = useCallback(() => {
     const monthlySchedules = getMonthlySchedules().filter(s => s.date === selectedDate);
     const existingDaily = getDailyTasks();
@@ -35,7 +89,6 @@ export default function DailyPage() {
     let added = false;
     const newTasks = [...existingDaily];
 
-    // Collect task names to add (expand 固定業務 into individual tasks)
     const taskNamesToAdd: string[] = [];
     for (const ms of monthlySchedules) {
       if (ms.taskName === '固定業務') {
@@ -45,9 +98,9 @@ export default function DailyPage() {
       }
     }
 
-    const uniqueTaskNames = [...new Set(taskNamesToAdd)];
+    const uniqueNames = [...new Set(taskNamesToAdd)];
 
-    for (const taskName of uniqueTaskNames) {
+    for (const taskName of uniqueNames) {
       const alreadyExists = dailyForDate.some(t => t.taskName === taskName);
       if (!alreadyExists) {
         const def = DEFAULT_TASKS.find(d => d.name === taskName);
@@ -82,10 +135,102 @@ export default function DailyPage() {
     setTaskDefsState(getTaskDefinitions());
     const tasksForDate = syncMonthlyTasks();
     setTasksState(tasksForDate);
-  }, [syncMonthlyTasks, dataVersion]);
+    setTimelineDataState(getTimelineForDate(selectedDate));
+  }, [syncMonthlyTasks, selectedDate, dataVersion]);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
+  // Shifts for selected date
+  const shiftsForDate = getShifts().filter(s => s.date === selectedDate);
+
+  // Members with shifts (active on this date)
+  const activeMembers = useMemo(() => {
+    return members.filter(m => shiftsForDate.some(s => s.memberId === m.id));
+  }, [members, shiftsForDate]);
+
+  // ===== Timeline handlers =====
+  function handleBlockMouseDown(memberId: string, blockIndex: number) {
+    if (!selectedPaintTask) return;
+    const memberBlocks = { ...(timelineData[memberId] || {}) };
+    const key = String(blockIndex);
+    if (memberBlocks[key] === selectedPaintTask) {
+      delete memberBlocks[key];
+      setDragMode('remove');
+    } else {
+      memberBlocks[key] = selectedPaintTask;
+      setDragMode('add');
+    }
+    const newData = { ...timelineData, [memberId]: memberBlocks };
+    setTimelineDataState(newData);
+    setTimelineForDate(selectedDate, newData);
+    setIsDragging(true);
+  }
+
+  function handleBlockMouseEnter(memberId: string, blockIndex: number) {
+    if (!isDragging || !selectedPaintTask) return;
+    const shift = shiftsForDate.find(s => s.memberId === memberId);
+    if (!isBlockInShift(blockIndex, shift)) return;
+
+    const memberBlocks = { ...(timelineData[memberId] || {}) };
+    const key = String(blockIndex);
+    if (dragMode === 'remove') {
+      delete memberBlocks[key];
+    } else {
+      memberBlocks[key] = selectedPaintTask;
+    }
+    const newData = { ...timelineData, [memberId]: memberBlocks };
+    setTimelineDataState(newData);
+    setTimelineForDate(selectedDate, newData);
+  }
+
+  function handleMouseUp() {
+    setIsDragging(false);
+  }
+
+  useEffect(() => {
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => window.removeEventListener('mouseup', handleMouseUp);
+  }, []);
+
+  // ===== Per-member timeline summary =====
+  const memberTimelineSummary = useMemo(() => {
+    return activeMembers.map(m => {
+      const memberBlocks = timelineData[m.id] || {};
+      const blockCount = Object.keys(memberBlocks).length;
+      const plannedMinutes = blockCount * 15;
+
+      // Task breakdown
+      const taskBreakdown: Record<string, number> = {};
+      Object.values(memberBlocks).forEach(taskName => {
+        taskBreakdown[taskName] = (taskBreakdown[taskName] || 0) + 15;
+      });
+
+      // Actual from daily tasks
+      const memberTasks = tasks.filter(t => t.assigneeId === m.id);
+      const actualMinutes = memberTasks.reduce((s, t) => s + t.actualMinutes, 0);
+      const actualCount = memberTasks.reduce((s, t) => s + t.actualCount, 0);
+
+      // Shift info
+      const shift = shiftsForDate.find(s => s.memberId === m.id);
+      const shiftMinutes = shift ? (() => {
+        const [sh, sm] = shift.startTime.split(':').map(Number);
+        const [eh, em] = shift.endTime.split(':').map(Number);
+        return (eh * 60 + em) - (sh * 60 + sm);
+      })() : 0;
+
+      return {
+        member: m,
+        plannedMinutes,
+        actualMinutes,
+        actualCount,
+        shiftMinutes,
+        taskBreakdown,
+        remainingMinutes: shiftMinutes - plannedMinutes,
+      };
+    });
+  }, [activeMembers, timelineData, tasks, shiftsForDate]);
+
+  // ===== Form handlers =====
   function handleAddTask() {
     if (!formTask) return;
     const def = taskDefs.find(t => t.name === formTask);
@@ -127,7 +272,6 @@ export default function DailyPage() {
     const all = getDailyTasks().map(t => {
       if (t.id !== id) return t;
       const updated = { ...t, [field]: value };
-      // Auto-recalculate plannedMinutes when count or minutesPerUnit changes
       if (field === 'plannedCount' || field === 'minutesPerUnit') {
         const count = field === 'plannedCount' ? (value as number) : t.plannedCount;
         const mpu = field === 'minutesPerUnit' ? (value as number) : (t.minutesPerUnit || 0);
@@ -165,9 +309,7 @@ export default function DailyPage() {
   function handleTaskSelect(taskName: string) {
     setFormTask(taskName);
     const def = taskDefs.find(t => t.name === taskName);
-    if (def) {
-      setFormMinutesPerUnit(def.estimatedMinutesPerUnit);
-    }
+    if (def) setFormMinutesPerUnit(def.estimatedMinutesPerUnit);
   }
 
   function handleCategoryChange(cat: string) {
@@ -178,51 +320,31 @@ export default function DailyPage() {
   const filteredFormTasks = formCategory ? (tasksByCategory[formCategory] || []) : taskDefs;
 
   // === Dashboard calculations ===
-
-  // Total required minutes from all tasks
   const totalRequiredMinutes = tasks.reduce((s, t) => s + t.plannedMinutes, 0);
-
-  // Available resource from shifts for this date
-  const shiftsForDate = getShifts().filter(s => s.date === selectedDate);
   const availableResourceMinutes = shiftsForDate.reduce((sum, s) => {
     const [sh, sm] = s.startTime.split(':').map(Number);
     const [eh, em] = s.endTime.split(':').map(Number);
     return sum + (eh * 60 + em - sh * 60 - sm);
   }, 0);
-
-  // Actual total
   const totalActualMinutes = tasks.reduce((s, t) => s + t.actualMinutes, 0);
-
-  // 画像査定 stats
-  const imageAssessmentTasks = tasks.filter(t => t.taskName === '【LINE】画像査定');
-  const imageAssessmentPlannedPoints = imageAssessmentTasks.reduce((s, t) => s + t.plannedCount, 0);
-  const imageAssessmentActualPoints = imageAssessmentTasks.reduce((s, t) => s + t.actualPoints, 0);
-
-  // 実査定 stats
-  const assessmentTaskNames = ['【査定】計算書作成', '【査定】計算書提出', '【査定】両日提出', '【査定】計算書確認', '【査定】計算書（下書き）', '【査定】計算書修正', '【査定】再提出'];
-  const assessmentTasks = tasks.filter(t => assessmentTaskNames.includes(t.taskName));
-  const assessmentActualCount = assessmentTasks.reduce((s, t) => s + t.actualCount, 0);
-  const assessmentActualPoints = assessmentTasks.reduce((s, t) => s + t.actualPoints, 0);
-
-  // Per-member summary for actuals tab
-  const memberActualSummary = members.map(m => {
-    const memberTasks = tasks.filter(t => t.assigneeId === m.id);
-    return {
-      member: m,
-      taskCount: memberTasks.length,
-      totalActualMinutes: memberTasks.reduce((s, t) => s + t.actualMinutes, 0),
-      totalActualCount: memberTasks.reduce((s, t) => s + t.actualCount, 0),
-      totalActualPoints: memberTasks.reduce((s, t) => s + t.actualPoints, 0),
-      completedCount: memberTasks.filter(t => t.status === 'completed').length,
-    };
-  }).filter(m => m.taskCount > 0);
-
-  // Resource balance
   const resourceBalance = availableResourceMinutes - totalRequiredMinutes;
+
+  // 画像査定: planned points from 【LINE】画像査定 only
+  const imageAssessmentPlannedPoints = tasks
+    .filter(t => t.taskName === '【LINE】画像査定')
+    .reduce((s, t) => s + t.plannedCount, 0);
+
+  // 実査定: 点数 from 【査定】計算書作成, 件数 from 【補助】郵送物開封
+  const realAssessmentPoints = tasks
+    .filter(t => t.taskName === '【査定】計算書作成')
+    .reduce((s, t) => s + t.plannedCount, 0);
+  const realAssessmentCount = tasks
+    .filter(t => t.taskName === '【補助】郵送物開封')
+    .reduce((s, t) => s + t.plannedCount, 0);
 
   return (
     <DashboardLayout>
-      <div className="space-y-6">
+      <div className="space-y-6" onMouseUp={handleMouseUp}>
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <h1 className="text-2xl font-bold text-gray-800">日次業務入力</h1>
           <div className="flex items-center gap-3">
@@ -254,16 +376,43 @@ export default function DailyPage() {
             <p className="text-lg font-bold text-blue-700">{totalActualMinutes}分 ({(totalActualMinutes / 60).toFixed(1)}h)</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-purple-200 shadow-sm">
-            <span className="text-xs text-purple-600">画像査定</span>
-            <p className="text-sm font-bold text-purple-700">予定: {imageAssessmentPlannedPoints}点</p>
-            <p className="text-sm font-bold text-purple-700">実績: {imageAssessmentActualPoints}点</p>
+            <span className="text-xs text-purple-600">画像査定（予定）</span>
+            <p className="text-lg font-bold text-purple-700">{imageAssessmentPlannedPoints}点</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-rose-200 shadow-sm">
             <span className="text-xs text-rose-600">実査定</span>
-            <p className="text-sm font-bold text-rose-700">件数: {assessmentActualCount}件</p>
-            <p className="text-sm font-bold text-rose-700">点数: {assessmentActualPoints}点</p>
+            <p className="text-sm font-bold text-rose-700">点数: {realAssessmentPoints}点</p>
+            <p className="text-sm font-bold text-rose-700">件数: {realAssessmentCount}件</p>
           </div>
         </div>
+
+        {/* Per-member summary cards */}
+        {memberTimelineSummary.length > 0 && (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            {memberTimelineSummary.map(ms => (
+              <div key={ms.member.id} className="bg-white rounded-lg px-4 py-3 border border-gray-100 shadow-sm">
+                <p className="text-xs font-bold text-gray-700">{ms.member.name}</p>
+                <div className="flex justify-between mt-1">
+                  <div>
+                    <p className="text-[10px] text-green-600">予定</p>
+                    <p className="text-sm font-bold text-green-700">{ms.plannedMinutes}分</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-blue-600">実績</p>
+                    <p className="text-sm font-bold text-blue-700">{ms.actualMinutes}分</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] text-gray-500">残り</p>
+                    <p className={`text-sm font-bold ${ms.remainingMinutes >= 0 ? 'text-gray-600' : 'text-red-600'}`}>
+                      {ms.remainingMinutes}分
+                    </p>
+                  </div>
+                </div>
+                <p className="text-[10px] text-gray-400 mt-1">シフト: {ms.shiftMinutes}分</p>
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Auto-sync notice */}
         {tasks.some(t => t.comment === '月次予定から自動反映') && (
@@ -377,8 +526,11 @@ export default function DailyPage() {
                       return (
                         <tr key={t.id} className={`border-b border-gray-50 hover:bg-green-50/30 ${isFromMonthly ? 'bg-blue-50/30' : ''}`}>
                           <td className="px-4 py-3 font-medium text-gray-800">
-                            <span className="text-xs">{t.taskName}</span>
-                            {isFromMonthly && <span className="ml-1 text-[10px] text-blue-500">(月次)</span>}
+                            <div className="flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
+                              <span className="text-xs">{t.taskName}</span>
+                              {isFromMonthly && <span className="text-[10px] text-blue-500">(月次)</span>}
+                            </div>
                           </td>
                           <td className="px-4 py-3">
                             <input type="number" value={t.plannedCount} onChange={e => handleUpdateField(t.id, 'plannedCount', Number(e.target.value))} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
@@ -426,20 +578,6 @@ export default function DailyPage() {
         {/* Actual Tab */}
         {viewTab === 'actual' && (
           <div className="space-y-4">
-            {/* Per-member summary cards */}
-            {memberActualSummary.length > 0 && (
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
-                {memberActualSummary.map(ms => (
-                  <div key={ms.member.id} className="bg-white rounded-lg px-4 py-3 border border-gray-100 shadow-sm">
-                    <p className="text-xs text-gray-500">{ms.member.name}</p>
-                    <p className="text-sm font-bold text-gray-800">{ms.totalActualMinutes}分 / {ms.totalActualCount}件</p>
-                    <p className="text-xs text-gray-400">{ms.completedCount}/{ms.taskCount} 完了</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            {/* Actuals table */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -508,74 +646,143 @@ export default function DailyPage() {
           </div>
         )}
 
-        {/* Timeline */}
-        {tasks.length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <h3 className="text-sm font-semibold text-gray-600 mb-4">タイムライン表示（予定）</h3>
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <div className="w-40" />
-                <div className="flex-1 flex">
-                  {Array.from({ length: 14 }, (_, i) => (
-                    <div key={i} className="flex-1 text-xs text-gray-400 text-center">{8 + i}:00</div>
-                  ))}
-                </div>
-              </div>
-              {/* Group tasks by assignee and show as timeline blocks */}
-              {(() => {
-                // Group tasks by assignee
-                const assigneeGroups: Record<string, DailyTask[]> = {};
-                tasks.forEach(t => {
-                  const key = t.assigneeId || '__unassigned__';
-                  if (!assigneeGroups[key]) assigneeGroups[key] = [];
-                  assigneeGroups[key].push(t);
-                });
-
-                return Object.entries(assigneeGroups).map(([assigneeId, assigneeTasks]) => {
-                  const member = members.find(m => m.id === assigneeId);
-                  const memberName = member?.name || '未割当';
-                  // Get shift for this member to determine start time
-                  const shift = shiftsForDate.find(s => s.memberId === assigneeId);
-                  const shiftStartMinutes = shift
-                    ? (parseInt(shift.startTime.split(':')[0]) - 8) * 60 + parseInt(shift.startTime.split(':')[1])
-                    : 60; // default 9:00
-
-                  let currentOffset = shiftStartMinutes;
-                  const totalMinutes = 14 * 60; // 8:00 - 22:00
-
-                  return assigneeTasks.map((t, idx) => {
-                    const left = Math.max(0, (currentOffset / totalMinutes) * 100);
-                    const duration = t.plannedMinutes || 30;
-                    const width = Math.max(1, (duration / totalMinutes) * 100);
-                    currentOffset += duration;
-
-                    return (
-                      <div key={t.id} className="flex items-center gap-2">
-                        <div className="w-40 text-xs text-gray-600 text-right truncate">
-                          {idx === 0 ? memberName + ': ' : ''}
-                          {t.taskName.replace(/^【[^】]+】/, '')}
-                        </div>
-                        <div className="flex-1 bg-gray-100 rounded h-6 relative">
-                          <div
-                            className={`absolute h-full rounded text-[8px] text-white flex items-center justify-center overflow-hidden ${
-                              t.status === 'completed' ? 'bg-green-500' :
-                              t.status === 'in_progress' ? 'bg-yellow-500' :
-                              'bg-blue-400'
-                            }`}
-                            style={{ left: `${left}%`, width: `${width}%` }}
-                            title={`${t.taskName} (${t.plannedMinutes}分)`}
-                          >
-                            {t.plannedMinutes > 20 ? `${t.plannedMinutes}分` : ''}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  });
-                });
-              })()}
+        {/* Per-person Timeline with 15-min clickable blocks */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
+            <h3 className="text-sm font-semibold text-gray-600">個人別タイムライン（15分単位 / クリックで入力）</h3>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500">業務選択:</label>
+              <select
+                value={selectedPaintTask}
+                onChange={e => setSelectedPaintTask(e.target.value)}
+                className="border rounded-lg px-3 py-1.5 text-xs min-w-[200px]"
+              >
+                <option value="">-- 業務を選択 --</option>
+                {TASK_CATEGORIES.map(cat => {
+                  const catTasks = (tasksByCategory[cat] || []);
+                  if (catTasks.length === 0) return null;
+                  return (
+                    <optgroup key={cat} label={cat}>
+                      {catTasks.map(t => (
+                        <option key={t.id} value={t.name}>{t.name}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+              {selectedPaintTask && (
+                <span className="flex items-center gap-1 text-xs bg-gray-50 px-2 py-1 rounded">
+                  <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getTaskColor(selectedPaintTask) }} />
+                  {selectedPaintTask.replace(/^【[^】]+】/, '')}
+                </span>
+              )}
             </div>
           </div>
-        )}
+
+          {/* Task color legend */}
+          {uniqueTaskNames.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-3 pb-3 border-b border-gray-100">
+              {uniqueTaskNames.map(name => (
+                <button
+                  key={name}
+                  onClick={() => setSelectedPaintTask(name)}
+                  className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded border transition-colors ${
+                    selectedPaintTask === name ? 'border-gray-800 bg-gray-100 font-bold' : 'border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(name) }} />
+                  {name.replace(/^【[^】]+】/, '')}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {activeMembers.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-8">この日にシフト登録されているメンバーがいません</p>
+          ) : (
+            <div className="overflow-x-auto select-none">
+              {/* Hour headers */}
+              <div className="flex items-center mb-1">
+                <div className="w-20 flex-shrink-0" />
+                <div className="flex flex-1">
+                  {Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => (
+                    <div key={i} className="text-[10px] text-gray-400 text-center" style={{ width: `${100 / (TIMELINE_END - TIMELINE_START)}%` }}>
+                      {TIMELINE_START + i}:00
+                    </div>
+                  ))}
+                </div>
+                <div className="w-16 flex-shrink-0" />
+              </div>
+
+              {/* Member rows */}
+              {activeMembers.map(m => {
+                const shift = shiftsForDate.find(s => s.memberId === m.id);
+                const memberBlocks = timelineData[m.id] || {};
+
+                // Calculate total for this member
+                const totalBlocks = Object.keys(memberBlocks).length;
+                const totalMins = totalBlocks * 15;
+
+                return (
+                  <div key={m.id} className="flex items-center mb-1 group">
+                    <div className="w-20 flex-shrink-0 text-xs font-medium text-gray-700 text-right pr-2 truncate" title={m.name}>
+                      {m.name}
+                    </div>
+                    <div className="flex flex-1 h-7 bg-gray-50 rounded overflow-hidden border border-gray-100">
+                      {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
+                        const inShift = isBlockInShift(i, shift);
+                        const taskName = memberBlocks[String(i)];
+                        const isHourStart = i % BLOCKS_PER_HOUR === 0;
+
+                        return (
+                          <div
+                            key={i}
+                            className={`h-full transition-colors ${
+                              isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'
+                            } ${inShift ? 'cursor-pointer hover:opacity-80' : 'opacity-30'}`}
+                            style={{
+                              width: `${100 / TOTAL_BLOCKS}%`,
+                              backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
+                            }}
+                            title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
+                            onMouseDown={() => inShift && handleBlockMouseDown(m.id, i)}
+                            onMouseEnter={() => handleBlockMouseEnter(m.id, i)}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
+                      {totalMins}分
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Per-member task breakdown */}
+          {memberTimelineSummary.some(ms => Object.keys(ms.taskBreakdown).length > 0) && (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <h4 className="text-xs font-semibold text-gray-500 mb-2">業務内訳（タイムライン）</h4>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {memberTimelineSummary.filter(ms => Object.keys(ms.taskBreakdown).length > 0).map(ms => (
+                  <div key={ms.member.id} className="bg-gray-50 rounded-lg p-3">
+                    <p className="text-xs font-bold text-gray-700 mb-1">{ms.member.name}（合計 {ms.plannedMinutes}分）</p>
+                    <div className="space-y-1">
+                      {Object.entries(ms.taskBreakdown).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => (
+                        <div key={taskName} className="flex items-center gap-2 text-[10px]">
+                          <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                          <span className="flex-1 text-gray-600 truncate">{taskName.replace(/^【[^】]+】/, '')}</span>
+                          <span className="font-bold text-gray-700">{mins}分</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </DashboardLayout>
   );

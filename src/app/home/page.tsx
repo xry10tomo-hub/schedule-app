@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getShippingRecords, getToday, calculateDailySummary } from '@/lib/store';
+import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getToday, getTimelineForDate, calculateDailySummary } from '@/lib/store';
 import type { DailyTask, ShippingRecord } from '@/lib/types';
 
 function ProgressRing({ percent, size = 120, stroke = 10, color = '#16a34a' }: { percent: number; size?: number; stroke?: number; color?: string }) {
@@ -44,17 +44,40 @@ function StatCard({ title, value, sub, color = 'green' }: { title: string; value
   );
 }
 
+// Task colors (same as daily page)
+const TASK_COLORS = [
+  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
+  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
+  '#e11d48', '#84cc16', '#0ea5e9', '#d946ef', '#fbbf24',
+  '#22c55e', '#a855f7', '#fb7185', '#2dd4bf', '#facc15',
+  '#78716c', '#64748b', '#0d9488', '#db2777', '#ea580c',
+  '#4f46e5', '#059669', '#dc2626', '#7c3aed', '#ca8a04',
+];
+
 export default function HomePage() {
   const { currentUserId, members, dataVersion } = useAppContext();
   const [tasks, setTasks] = useState<DailyTask[]>([]);
   const [shippingRecords, setShippingRecordsState] = useState<ShippingRecord[]>([]);
+  const [myTimelineTasks, setMyTimelineTasks] = useState<Record<string, number>>({});
+  const [myTimelineTotal, setMyTimelineTotal] = useState(0);
   const today = getToday();
   const currentMember = members.find(m => m.id === currentUserId);
 
   useEffect(() => {
-    setTasks(getDailyTasks().filter(t => t.date === today));
+    const allTasks = getDailyTasks().filter(t => t.date === today);
+    setTasks(allTasks);
     setShippingRecordsState(getShippingRecords().filter(r => r.date === today));
-  }, [today, dataVersion]);
+
+    // Load timeline data for current user
+    const timelineData = getTimelineForDate(today);
+    const myBlocks = timelineData[currentUserId] || {};
+    const taskBreakdown: Record<string, number> = {};
+    Object.values(myBlocks).forEach(taskName => {
+      taskBreakdown[taskName] = (taskBreakdown[taskName] || 0) + 15;
+    });
+    setMyTimelineTasks(taskBreakdown);
+    setMyTimelineTotal(Object.keys(myBlocks).length * 15);
+  }, [today, dataVersion, currentUserId]);
 
   const summary = calculateDailySummary(today);
   const myTasks = tasks.filter(t => t.assigneeId === currentUserId);
@@ -63,6 +86,29 @@ export default function HomePage() {
 
   const totalShippingPoints = shippingRecords.reduce((s, r) => s + r.points, 0);
   const totalShippingItems = shippingRecords.reduce((s, r) => s + r.itemCount, 0);
+
+  // My actual totals
+  const myActualMinutes = myTasks.reduce((s, t) => s + t.actualMinutes, 0);
+  const myActualCount = myTasks.reduce((s, t) => s + t.actualCount, 0);
+
+  // Shift for current user
+  const shifts = getShifts().filter(s => s.date === today && s.memberId === currentUserId);
+  const myShiftMinutes = shifts.reduce((sum, s) => {
+    const [sh, sm] = s.startTime.split(':').map(Number);
+    const [eh, em] = s.endTime.split(':').map(Number);
+    return sum + (eh * 60 + em - sh * 60 - sm);
+  }, 0);
+
+  // All unique task names for color mapping
+  const allTaskNames = Array.from(new Set([
+    ...tasks.map(t => t.taskName),
+    ...Object.keys(myTimelineTasks),
+  ])).sort();
+
+  function getTaskColor(taskName: string): string {
+    const idx = allTaskNames.indexOf(taskName);
+    return idx >= 0 ? TASK_COLORS[idx % TASK_COLORS.length] : '#9ca3af';
+  }
 
   // Per-member task summary for the chart
   const memberTaskCounts = members.map(m => {
@@ -113,22 +159,121 @@ export default function HomePage() {
             <p className="mt-3 text-sm text-gray-500">{myCompleted} / {myTasks.length} タスク完了</p>
           </div>
 
+          {/* My Resource Summary */}
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="text-sm font-semibold text-gray-600 mb-4">自分のリソース</h3>
+            <div className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-gray-500">シフト時間</span>
+                <span className="text-sm font-bold text-gray-700">{myShiftMinutes}分 ({(myShiftMinutes / 60).toFixed(1)}h)</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-green-600">予定時間（タイムライン）</span>
+                <span className="text-sm font-bold text-green-700">{myTimelineTotal}分</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-blue-600">実績時間</span>
+                <span className="text-sm font-bold text-blue-700">{myActualMinutes}分</span>
+              </div>
+              <div className="flex justify-between items-center border-t pt-2">
+                <span className="text-xs text-gray-500">残り</span>
+                <span className={`text-sm font-bold ${(myShiftMinutes - myTimelineTotal) >= 0 ? 'text-gray-600' : 'text-red-600'}`}>
+                  {myShiftMinutes - myTimelineTotal}分
+                </span>
+              </div>
+            </div>
+          </div>
+
           {/* Team Progress */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col items-center">
             <h3 className="text-sm font-semibold text-gray-600 mb-4">チーム全体の進捗</h3>
             <ProgressRing percent={summary.completionRate} color="#059669" />
             <p className="mt-3 text-sm text-gray-500">{summary.completedCount} / {summary.taskCount} タスク完了</p>
           </div>
+        </div>
 
-          {/* Points Progress */}
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col items-center">
-            <h3 className="text-sm font-semibold text-gray-600 mb-4">点数進捗率</h3>
-            <ProgressRing
-              percent={summary.totalPlannedPoints > 0 ? (summary.totalActualPoints / summary.totalPlannedPoints) * 100 : 0}
-              color="#7c3aed"
-            />
-            <p className="mt-3 text-sm text-gray-500">実績 {summary.totalActualPoints} / 予定 {summary.totalPlannedPoints} 点</p>
+        {/* My Today's Timeline Tasks */}
+        {Object.keys(myTimelineTasks).length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="text-sm font-semibold text-gray-600 mb-4">本日の予定（タイムライン）</h3>
+            <div className="space-y-2">
+              {Object.entries(myTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => (
+                <div key={taskName} className="flex items-center gap-3">
+                  <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                  <span className="text-sm text-gray-700 flex-1">{taskName}</span>
+                  <span className="text-sm font-bold text-gray-800">{mins}分</span>
+                  <div className="w-32 bg-gray-100 rounded-full h-2 overflow-hidden">
+                    <div
+                      className="h-full rounded-full"
+                      style={{
+                        width: `${Math.min((mins / myShiftMinutes) * 100, 100)}%`,
+                        backgroundColor: getTaskColor(taskName),
+                      }}
+                    />
+                  </div>
+                </div>
+              ))}
+              <div className="flex items-center gap-3 pt-2 border-t border-gray-100 mt-2">
+                <span className="w-3 h-3" />
+                <span className="text-sm font-bold text-gray-700 flex-1">合計</span>
+                <span className="text-sm font-bold text-green-700">{myTimelineTotal}分</span>
+                <div className="w-32" />
+              </div>
+            </div>
           </div>
+        )}
+
+        {/* My Today's Tasks (from daily task list) */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+          <h3 className="text-sm font-semibold text-gray-600 mb-4">本日の自分のタスク</h3>
+          {myTasks.length === 0 ? (
+            <p className="text-gray-400 text-sm text-center py-8">本日のタスクはまだ割り当てられていません</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-gray-500 border-b">
+                    <th className="pb-2 font-medium">業務名</th>
+                    <th className="pb-2 font-medium">予定時間</th>
+                    <th className="pb-2 font-medium">実績件数</th>
+                    <th className="pb-2 font-medium">実績時間</th>
+                    <th className="pb-2 font-medium">差分</th>
+                    <th className="pb-2 font-medium">ステータス</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {myTasks.map(t => {
+                    const gap = t.actualMinutes - t.plannedMinutes;
+                    return (
+                      <tr key={t.id} className="border-b border-gray-50 hover:bg-green-50/50">
+                        <td className="py-2 font-medium text-gray-800">
+                          <div className="flex items-center gap-2">
+                            <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
+                            {t.taskName}
+                          </div>
+                        </td>
+                        <td className="py-2 text-gray-600">{t.plannedMinutes}分</td>
+                        <td className="py-2 text-gray-600">{t.actualCount}件</td>
+                        <td className="py-2 text-gray-600">{t.actualMinutes}分</td>
+                        <td className={`py-2 font-semibold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                          {gap > 0 ? '+' : ''}{gap}分
+                        </td>
+                        <td className="py-2">
+                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                            t.status === 'completed' ? 'bg-green-100 text-green-700' :
+                            t.status === 'in_progress' ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-gray-100 text-gray-500'
+                          }`}>
+                            {t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '未着手'}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         {/* Member bar chart */}
@@ -156,52 +301,6 @@ export default function HomePage() {
                   </div>
                 );
               })}
-            </div>
-          )}
-        </div>
-
-        {/* My Today's Tasks */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-600 mb-4">本日の自分のタスク</h3>
-          {myTasks.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">本日のタスクはまだありません</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-500 border-b">
-                    <th className="pb-2 font-medium">業務名</th>
-                    <th className="pb-2 font-medium">予定時間</th>
-                    <th className="pb-2 font-medium">実績時間</th>
-                    <th className="pb-2 font-medium">差分</th>
-                    <th className="pb-2 font-medium">ステータス</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {myTasks.map(t => {
-                    const gap = t.actualMinutes - t.plannedMinutes;
-                    return (
-                      <tr key={t.id} className="border-b border-gray-50 hover:bg-green-50/50">
-                        <td className="py-2 font-medium text-gray-800">{t.taskName}</td>
-                        <td className="py-2 text-gray-600">{t.plannedMinutes}分</td>
-                        <td className="py-2 text-gray-600">{t.actualMinutes}分</td>
-                        <td className={`py-2 font-semibold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                          {gap > 0 ? '+' : ''}{gap}分
-                        </td>
-                        <td className="py-2">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            t.status === 'completed' ? 'bg-green-100 text-green-700' :
-                            t.status === 'in_progress' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-gray-100 text-gray-500'
-                          }`}>
-                            {t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '未着手'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
             </div>
           )}
         </div>
