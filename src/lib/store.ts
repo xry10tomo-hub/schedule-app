@@ -16,16 +16,16 @@ import type {
 // ============ Default Data ============
 
 export const DEFAULT_MEMBERS: Member[] = [
-  { id: 'wada', name: '和田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'ushioda', name: '潮田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'kunigane', name: '国兼', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'kumagai', name: '熊谷', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'suzuki', name: '鈴木', role: 'employee', isAdmin: true, skills: [], speedRatings: {}, email: '' },
-  { id: 'mihara', name: '三原', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'nakatani', name: '中谷', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'sato', name: '佐藤', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'ishii', name: '石井', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, email: '' },
-  { id: 'kagami', name: '加々美', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, email: '' },
+  { id: 'wada', name: '和田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'ushioda', name: '潮田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'kunigane', name: '国兼', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'kumagai', name: '熊谷', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'suzuki', name: '鈴木', role: 'employee', isAdmin: true, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'mihara', name: '三原', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'nakatani', name: '中谷', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'sato', name: '佐藤', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'ishii', name: '石井', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'kagami', name: '加々美', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
 ];
 
 // Task categories for grouping in dropdowns
