@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getToday, getTimelineForDate, calculateDailySummary } from '@/lib/store';
-import type { DailyTask, ShippingRecord } from '@/lib/types';
+import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, calculateDailySummary } from '@/lib/store';
+import type { DailyTask, ShippingRecord, ShiftEntry } from '@/lib/types';
 
 function ProgressRing({ percent, size = 120, stroke = 10, color = '#16a34a' }: { percent: number; size?: number; stroke?: number; color?: string }) {
   const radius = (size - stroke) / 2;
@@ -44,7 +44,12 @@ function StatCard({ title, value, sub, color = 'green' }: { title: string; value
   );
 }
 
-// Task colors (same as daily page)
+// Timeline constants
+const TIMELINE_START = 8;
+const TIMELINE_END = 22;
+const BLOCKS_PER_HOUR = 4;
+const TOTAL_BLOCKS = (TIMELINE_END - TIMELINE_START) * BLOCKS_PER_HOUR;
+
 const TASK_COLORS = [
   '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
   '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
@@ -54,56 +59,67 @@ const TASK_COLORS = [
   '#4f46e5', '#059669', '#dc2626', '#7c3aed', '#ca8a04',
 ];
 
+function blockToTime(blockIndex: number): string {
+  const totalMinutes = TIMELINE_START * 60 + blockIndex * 15;
+  const h = Math.floor(totalMinutes / 60);
+  const m = totalMinutes % 60;
+  return `${h}:${m.toString().padStart(2, '0')}`;
+}
+
 export default function HomePage() {
-  const { currentUserId, members, dataVersion } = useAppContext();
+  const { currentUserId, members, dataVersion, selectedDate } = useAppContext();
   const [tasks, setTasks] = useState<DailyTask[]>([]);
   const [shippingRecords, setShippingRecordsState] = useState<ShippingRecord[]>([]);
-  const [myTimelineTasks, setMyTimelineTasks] = useState<Record<string, number>>({});
-  const [myTimelineTotal, setMyTimelineTotal] = useState(0);
-  const today = getToday();
+  const [timelineData, setTimelineData] = useState<Record<string, Record<string, string>>>({});
   const currentMember = members.find(m => m.id === currentUserId);
 
   useEffect(() => {
-    const allTasks = getDailyTasks().filter(t => t.date === today);
+    const allTasks = getDailyTasks().filter(t => t.date === selectedDate);
     setTasks(allTasks);
-    setShippingRecordsState(getShippingRecords().filter(r => r.date === today));
+    setShippingRecordsState(getShippingRecords().filter(r => r.date === selectedDate));
+    setTimelineData(getTimelineForDate(selectedDate));
+  }, [selectedDate, dataVersion, currentUserId]);
 
-    // Load timeline data for current user
-    const timelineData = getTimelineForDate(today);
-    const myBlocks = timelineData[currentUserId] || {};
-    const taskBreakdown: Record<string, number> = {};
-    Object.values(myBlocks).forEach(taskName => {
-      taskBreakdown[taskName] = (taskBreakdown[taskName] || 0) + 15;
-    });
-    setMyTimelineTasks(taskBreakdown);
-    setMyTimelineTotal(Object.keys(myBlocks).length * 15);
-  }, [today, dataVersion, currentUserId]);
-
-  const summary = calculateDailySummary(today);
+  const summary = calculateDailySummary(selectedDate);
   const myTasks = tasks.filter(t => t.assigneeId === currentUserId);
   const myCompleted = myTasks.filter(t => t.status === 'completed').length;
   const myProgress = myTasks.length > 0 ? (myCompleted / myTasks.length) * 100 : 0;
 
+  const totalShippingRecords = shippingRecords.length;
   const totalShippingPoints = shippingRecords.reduce((s, r) => s + r.points, 0);
-  const totalShippingItems = shippingRecords.reduce((s, r) => s + r.itemCount, 0);
+
+  // Shift data
+  const shiftsForDate = getShifts().filter(s => s.date === selectedDate);
+  const myShift = shiftsForDate.find(s => s.memberId === currentUserId);
+  const myShiftMinutes = myShift ? (() => {
+    const [sh, sm] = myShift.startTime.split(':').map(Number);
+    const [eh, em] = myShift.endTime.split(':').map(Number);
+    return (eh * 60 + em) - (sh * 60 + sm);
+  })() : 0;
+
+  // My timeline breakdown
+  const myBlocks = timelineData[currentUserId] || {};
+  const myTimelineTasks: Record<string, number> = {};
+  Object.values(myBlocks).forEach(tn => { myTimelineTasks[tn] = (myTimelineTasks[tn] || 0) + 15; });
+  const myTimelineTotal = Object.keys(myBlocks).length * 15;
 
   // My actual totals
   const myActualMinutes = myTasks.reduce((s, t) => s + t.actualMinutes, 0);
-  const myActualCount = myTasks.reduce((s, t) => s + t.actualCount, 0);
 
-  // Shift for current user
-  const shifts = getShifts().filter(s => s.date === today && s.memberId === currentUserId);
-  const myShiftMinutes = shifts.reduce((sum, s) => {
-    const [sh, sm] = s.startTime.split(':').map(Number);
-    const [eh, em] = s.endTime.split(':').map(Number);
-    return sum + (eh * 60 + em - sh * 60 - sm);
-  }, 0);
+  // Active members (with shifts)
+  const activeMembers = useMemo(() => {
+    return members.filter(m => shiftsForDate.some(s => s.memberId === m.id));
+  }, [members, shiftsForDate]);
 
-  // All unique task names for color mapping
-  const allTaskNames = Array.from(new Set([
-    ...tasks.map(t => t.taskName),
-    ...Object.keys(myTimelineTasks),
-  ])).sort();
+  // All unique task names for color mapping (from all timelines)
+  const allTaskNames = useMemo(() => {
+    const names = new Set<string>();
+    tasks.forEach(t => names.add(t.taskName));
+    Object.values(timelineData).forEach(mb => {
+      Object.values(mb).forEach(tn => names.add(tn));
+    });
+    return Array.from(names).sort();
+  }, [tasks, timelineData]);
 
   function getTaskColor(taskName: string): string {
     const idx = allTaskNames.indexOf(taskName);
@@ -117,6 +133,10 @@ export default function HomePage() {
     return { name: m.name, total: memberTasks.length, completed };
   }).filter(m => m.total > 0);
 
+  // Date display
+  const dateObj = new Date(selectedDate + 'T00:00:00');
+  const dateStr = dateObj.toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' });
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -126,9 +146,7 @@ export default function HomePage() {
             <h1 className="text-2xl font-bold text-gray-800">
               おはようございます、{currentMember?.name || 'ゲスト'}さん
             </h1>
-            <p className="text-gray-500 text-sm mt-1">
-              {new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })}
-            </p>
+            <p className="text-gray-500 text-sm mt-1">{dateStr}</p>
           </div>
           <div className="flex gap-2">
             <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
@@ -144,22 +162,20 @@ export default function HomePage() {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard title="本日の到着件数" value={totalShippingItems} sub="件" color="blue" />
-          <StatCard title="本日の到着点数" value={totalShippingPoints} sub="点" color="purple" />
+          <StatCard title="到着件数" value={totalShippingRecords} sub="件" color="blue" />
+          <StatCard title="到着点数" value={totalShippingPoints} sub="点" color="purple" />
           <StatCard title="チーム全体タスク" value={summary.taskCount} sub={`完了: ${summary.completedCount}`} color="green" />
           <StatCard title="予実差分" value={`${summary.gapMinutes >= 0 ? '+' : ''}${summary.gapMinutes}分`} sub="実績 - 予定" color="orange" />
         </div>
 
         {/* Progress Section */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* My Progress */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col items-center">
             <h3 className="text-sm font-semibold text-gray-600 mb-4">自分の進捗</h3>
             <ProgressRing percent={myProgress} />
             <p className="mt-3 text-sm text-gray-500">{myCompleted} / {myTasks.length} タスク完了</p>
           </div>
 
-          {/* My Resource Summary */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
             <h3 className="text-sm font-semibold text-gray-600 mb-4">自分のリソース</h3>
             <div className="space-y-3">
@@ -184,7 +200,6 @@ export default function HomePage() {
             </div>
           </div>
 
-          {/* Team Progress */}
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col items-center">
             <h3 className="text-sm font-semibold text-gray-600 mb-4">チーム全体の進捗</h3>
             <ProgressRing percent={summary.completionRate} color="#059669" />
@@ -192,42 +207,137 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* My Today's Timeline Tasks */}
-        {Object.keys(myTimelineTasks).length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <h3 className="text-sm font-semibold text-gray-600 mb-4">本日の予定（タイムライン）</h3>
-            <div className="space-y-2">
+        {/* ===== My Timeline ===== */}
+        {Object.keys(myBlocks).length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-green-200 p-6">
+            <h3 className="text-sm font-semibold text-green-700 mb-3">自分のタイムライン</h3>
+            <div className="overflow-x-auto select-none">
+              <div className="flex items-center mb-1">
+                <div className="w-16 flex-shrink-0" />
+                <div className="flex flex-1">
+                  {Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => (
+                    <div key={i} className="text-[10px] text-gray-400 text-center" style={{ width: `${100 / (TIMELINE_END - TIMELINE_START)}%` }}>
+                      {TIMELINE_START + i}:00
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center">
+                <div className="w-16 flex-shrink-0 text-xs font-bold text-green-700 text-right pr-2">
+                  {currentMember?.name}
+                </div>
+                <div className="flex flex-1 h-8 bg-gray-50 rounded overflow-hidden border border-gray-100">
+                  {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
+                    const inShift = myShift ? (() => {
+                      const [sh, sm] = myShift.startTime.split(':').map(Number);
+                      const [eh, em] = myShift.endTime.split(':').map(Number);
+                      const blockStart = TIMELINE_START * 60 + i * 15;
+                      return blockStart >= sh * 60 + sm && blockStart < eh * 60 + em;
+                    })() : false;
+                    const taskName = myBlocks[String(i)];
+                    const isHourStart = i % BLOCKS_PER_HOUR === 0;
+                    return (
+                      <div
+                        key={i}
+                        className={`h-full ${isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'} ${inShift ? '' : 'opacity-30'}`}
+                        style={{
+                          width: `${100 / TOTAL_BLOCKS}%`,
+                          backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
+                        }}
+                        title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            {/* My task breakdown */}
+            <div className="mt-3 space-y-1">
               {Object.entries(myTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => (
-                <div key={taskName} className="flex items-center gap-3">
-                  <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
-                  <span className="text-sm text-gray-700 flex-1">{taskName}</span>
-                  <span className="text-sm font-bold text-gray-800">{mins}分</span>
-                  <div className="w-32 bg-gray-100 rounded-full h-2 overflow-hidden">
-                    <div
-                      className="h-full rounded-full"
-                      style={{
-                        width: `${Math.min((mins / myShiftMinutes) * 100, 100)}%`,
-                        backgroundColor: getTaskColor(taskName),
-                      }}
-                    />
-                  </div>
+                <div key={taskName} className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                  <span className="text-xs text-gray-700 flex-1">{taskName}</span>
+                  <span className="text-xs font-bold text-gray-800">{mins}分</span>
                 </div>
               ))}
-              <div className="flex items-center gap-3 pt-2 border-t border-gray-100 mt-2">
-                <span className="w-3 h-3" />
-                <span className="text-sm font-bold text-gray-700 flex-1">合計</span>
-                <span className="text-sm font-bold text-green-700">{myTimelineTotal}分</span>
-                <div className="w-32" />
+            </div>
+          </div>
+        )}
+
+        {/* ===== Team Timeline (all members) ===== */}
+        {activeMembers.length > 0 && Object.keys(timelineData).length > 0 && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
+            <h3 className="text-sm font-semibold text-gray-600 mb-3">チーム全体のタイムライン</h3>
+            <div className="overflow-x-auto select-none">
+              <div className="flex items-center mb-1">
+                <div className="w-20 flex-shrink-0" />
+                <div className="flex flex-1">
+                  {Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => (
+                    <div key={i} className="text-[10px] text-gray-400 text-center" style={{ width: `${100 / (TIMELINE_END - TIMELINE_START)}%` }}>
+                      {TIMELINE_START + i}:00
+                    </div>
+                  ))}
+                </div>
+                <div className="w-16 flex-shrink-0" />
               </div>
+              {activeMembers.map(m => {
+                const shift = shiftsForDate.find(s => s.memberId === m.id);
+                const memberBlocks = timelineData[m.id] || {};
+                const totalMins = Object.keys(memberBlocks).length * 15;
+                const isMe = m.id === currentUserId;
+
+                return (
+                  <div key={m.id} className={`flex items-center mb-1 ${isMe ? 'bg-green-50/50 rounded' : ''}`}>
+                    <div className={`w-20 flex-shrink-0 text-xs font-medium text-right pr-2 truncate ${isMe ? 'text-green-700 font-bold' : 'text-gray-700'}`}>
+                      {m.name}{isMe ? ' ★' : ''}
+                    </div>
+                    <div className="flex flex-1 h-7 bg-gray-50 rounded overflow-hidden border border-gray-100">
+                      {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
+                        const inShift = shift ? (() => {
+                          const [sh, sm] = shift.startTime.split(':').map(Number);
+                          const [eh, em] = shift.endTime.split(':').map(Number);
+                          const blockStart = TIMELINE_START * 60 + i * 15;
+                          return blockStart >= sh * 60 + sm && blockStart < eh * 60 + em;
+                        })() : false;
+                        const taskName = memberBlocks[String(i)];
+                        const isHourStart = i % BLOCKS_PER_HOUR === 0;
+                        return (
+                          <div
+                            key={i}
+                            className={`h-full ${isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'} ${inShift ? '' : 'opacity-30'}`}
+                            style={{
+                              width: `${100 / TOTAL_BLOCKS}%`,
+                              backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
+                            }}
+                            title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
+                          />
+                        );
+                      })}
+                    </div>
+                    <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
+                      {totalMins}分
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {/* Color legend */}
+            <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100">
+              {allTaskNames.map(name => (
+                <span key={name} className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50">
+                  <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(name) }} />
+                  {name.replace(/^【[^】]+】/, '')}
+                </span>
+              ))}
             </div>
           </div>
         )}
 
         {/* My Today's Tasks (from daily task list) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-600 mb-4">本日の自分のタスク</h3>
+          <h3 className="text-sm font-semibold text-gray-600 mb-4">自分のタスク</h3>
           {myTasks.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">本日のタスクはまだ割り当てられていません</p>
+            <p className="text-gray-400 text-sm text-center py-8">タスクはまだ割り当てられていません</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -280,7 +390,7 @@ export default function HomePage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
           <h3 className="text-sm font-semibold text-gray-600 mb-4">メンバー別タスク進捗</h3>
           {memberTaskCounts.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">本日のタスクはまだありません</p>
+            <p className="text-gray-400 text-sm text-center py-8">タスクはまだありません</p>
           ) : (
             <div className="space-y-3">
               {memberTaskCounts.map(m => {

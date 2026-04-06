@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { AppContext, getMembers, getCurrentUser, setCurrentUser, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS } from '@/lib/store';
+import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS } from '@/lib/store';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
@@ -12,6 +12,7 @@ export default function AppProvider({ children }: { children: React.ReactNode })
   const [dataVersion, setDataVersion] = useState(0);
   const [firestoreReady, setFirestoreReady] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDateState] = useState(getToday());
 
   useEffect(() => {
     setCurrentUserIdState(getCurrentUser());
@@ -86,6 +87,10 @@ export default function AppProvider({ children }: { children: React.ReactNode })
     setCurrentUser(id);
   }, []);
 
+  const handleSetSelectedDate = useCallback((date: string) => {
+    setSelectedDateState(date);
+  }, []);
+
   const refreshMembers = useCallback(() => {
     setMembersState(getMembers());
   }, []);
@@ -109,6 +114,8 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       refreshMembers,
       dataVersion,
       firestoreReady,
+      selectedDate,
+      setSelectedDate: handleSetSelectedDate,
     }}>
       {children}
     </AppContext.Provider>

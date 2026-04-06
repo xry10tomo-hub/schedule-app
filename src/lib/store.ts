@@ -411,6 +411,8 @@ export interface AppContextType {
   refreshMembers: () => void;
   dataVersion: number; // increments on remote Firestore updates
   firestoreReady: boolean;
+  selectedDate: string; // shared across pages (YYYY-MM-DD)
+  setSelectedDate: (date: string) => void;
 }
 
 export const AppContext = createContext<AppContextType>({
@@ -420,6 +422,8 @@ export const AppContext = createContext<AppContextType>({
   refreshMembers: () => {},
   dataVersion: 0,
   firestoreReady: false,
+  selectedDate: '',
+  setSelectedDate: () => {},
 });
 
 export function useAppContext() {

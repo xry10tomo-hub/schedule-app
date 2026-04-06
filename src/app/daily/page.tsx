@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, getToday, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
 
 // Timeline constants
@@ -39,9 +39,8 @@ function isBlockInShift(blockIndex: number, shift: ShiftEntry | undefined): bool
 }
 
 export default function DailyPage() {
-  const { members, currentUserId, dataVersion } = useAppContext();
+  const { members, currentUserId, dataVersion, selectedDate, setSelectedDate } = useAppContext();
   const [tasks, setTasksState] = useState<DailyTask[]>([]);
-  const [selectedDate, setSelectedDate] = useState(getToday());
   const [showForm, setShowForm] = useState(false);
   const [taskDefs, setTaskDefsState] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [viewTab, setViewTab] = useState<'plan' | 'actual'>('plan');

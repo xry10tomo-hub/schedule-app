@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getToday, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
 import type { DailyTask, Member, ShiftEntry } from '@/lib/types';
 
 // ===== Timeline Constants =====
@@ -200,8 +200,7 @@ function runAutoAssignAlgorithm(
 
 // ===== Page Component =====
 export default function AutoAssignPage() {
-  const { members, dataVersion } = useAppContext();
-  const [date, setDate] = useState(getToday());
+  const { members, dataVersion, selectedDate: date } = useAppContext();
   const [previewTimeline, setPreviewTimeline] = useState<Record<string, Record<string, string>> | null>(null);
   const [tasks, setTasksState] = useState<DailyTask[]>([]);
   const [applied, setApplied] = useState(false);
@@ -341,7 +340,7 @@ export default function AutoAssignPage() {
               メンバーのスキル・優先順位・出勤状況から、1日のタイムスケジュールを自動生成します
             </p>
           </div>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white" />
+          <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{date}</span>
         </div>
 
         {/* Status cards */}
