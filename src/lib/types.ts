@@ -8,7 +8,7 @@ export interface Member {
   skills: string[];
   speedRatings: Record<string, number>; // taskName -> minutes per unit (小数点第1位)
   priorityRatings: Record<string, number>; // taskName -> priority (1=最優先, 数字が小さいほど優先)
-  scheduledTimeRatings: Record<string, string>; // taskName -> scheduled time (HH:mm format, e.g. "09:00")
+  scheduledTimeRatings: Record<string, string[]>; // taskName -> array of time ranges (e.g. ["09:00-10:00", "14:00-15:00"])
   email?: string;
 }
 

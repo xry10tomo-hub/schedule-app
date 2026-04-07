@@ -104,34 +104,39 @@ function runAutoAssignAlgorithm(
     if (task.taskName === BREAK_TASK_NAME) continue;
     const blocksNeeded = Math.max(1, Math.ceil(task.plannedMinutes / 15));
 
-    // Find members who have a scheduledTime for this task
+    // Find members who have scheduledTime(s) for this task
     const membersWithScheduledTime = activeMembers.filter(m => {
       const st = (m.scheduledTimeRatings || {})[task.taskName];
+      // Support both old string format and new string[] format
+      if (Array.isArray(st)) return st.length > 0 && m.skills.includes(task.taskName);
       return st && m.skills.includes(task.taskName);
     });
 
     for (const member of membersWithScheduledTime) {
-      const scheduledTime = (member.scheduledTimeRatings || {})[task.taskName];
-      if (!scheduledTime) continue;
+      const rawSt = (member.scheduledTimeRatings || {})[task.taskName];
+      // Normalize to array
+      const timeRanges: string[] = Array.isArray(rawSt) ? rawSt : (typeof rawSt === 'string' && rawSt ? [rawSt] : []);
 
-      // Parse range format "HH:mm-HH:mm"
-      const parts = scheduledTime.split('-');
-      if (parts.length !== 2) continue;
+      for (const scheduledTime of timeRanges) {
+        // Parse range format "HH:mm-HH:mm"
+        const parts = scheduledTime.split('-');
+        if (parts.length !== 2) continue;
 
-      const [startH, startM] = parts[0].split(':').map(Number);
-      const [endH, endM] = parts[1].split(':').map(Number);
-      const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
-      const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
-      if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
+        const [startH, startM] = parts[0].split(':').map(Number);
+        const [endH, endM] = parts[1].split(':').map(Number);
+        const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
+        const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
+        if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
 
-      // Place blocks within the scheduled time range
-      for (let b = startBlock; b < Math.min(endBlock, TOTAL_BLOCKS); b++) {
-        if (memberAvailableBlocks[member.id]?.includes(b)) {
-          timeline[member.id][String(b)] = task.taskName;
-          memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== b);
+        // Place blocks within the scheduled time range
+        for (let b = startBlock; b < Math.min(endBlock, TOTAL_BLOCKS); b++) {
+          if (memberAvailableBlocks[member.id]?.includes(b)) {
+            timeline[member.id][String(b)] = task.taskName;
+            memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== b);
+          }
         }
       }
-      scheduledTasksHandled.add(task.taskName);
+      if (timeRanges.length > 0) scheduledTasksHandled.add(task.taskName);
     }
   }
 
@@ -470,16 +475,19 @@ export default function AutoAssignPage() {
                         </td>
                         <td className="px-3 py-2">
                           {(() => {
-                            const scheduledTimes = capableMembers
-                              .map(m => ({ name: m.name, time: (m.scheduledTimeRatings || {})[t.taskName] }))
-                              .filter(x => x.time);
-                            return scheduledTimes.length > 0 ? (
+                            const scheduledEntries: { name: string; times: string[] }[] = [];
+                            capableMembers.forEach(m => {
+                              const raw = (m.scheduledTimeRatings || {})[t.taskName];
+                              const times: string[] = Array.isArray(raw) ? raw : (typeof raw === 'string' && raw ? [raw] : []);
+                              if (times.length > 0) scheduledEntries.push({ name: m.name, times });
+                            });
+                            return scheduledEntries.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {scheduledTimes.map(st => (
-                                  <span key={st.name} className="text-[10px] px-1.5 py-0.5 bg-orange-50 text-orange-700 rounded">
-                                    {st.name}@{st.time.replace('-', '～')}
+                                {scheduledEntries.map(se => se.times.map((time, i) => (
+                                  <span key={`${se.name}-${i}`} className="text-[10px] px-1.5 py-0.5 bg-orange-50 text-orange-700 rounded">
+                                    {se.name}@{time.replace('-', '～')}
                                   </span>
-                                ))}
+                                )))}
                               </div>
                             ) : <span className="text-xs text-gray-400">-</span>;
                           })()}

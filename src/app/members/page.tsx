@@ -12,7 +12,7 @@ export default function MembersPage() {
   const [editSkills, setEditSkills] = useState<string[]>([]);
   const [editSpeeds, setEditSpeeds] = useState<Record<string, number>>({});
   const [editPriorities, setEditPriorities] = useState<Record<string, number>>({});
-  const [editScheduledTimes, setEditScheduledTimes] = useState<Record<string, string>>({});
+  const [editScheduledTimes, setEditScheduledTimes] = useState<Record<string, string[]>>({});
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   // 15-min time slot options for scheduled time range
@@ -45,7 +45,14 @@ export default function MembersPage() {
     setEditSkills([...member.skills]);
     setEditSpeeds({ ...member.speedRatings });
     setEditPriorities({ ...(member.priorityRatings || {}) });
-    setEditScheduledTimes({ ...(member.scheduledTimeRatings || {}) });
+    // Normalize: old format was string, new format is string[]
+    const rawTimes = member.scheduledTimeRatings || {};
+    const normalized: Record<string, string[]> = {};
+    for (const [k, v] of Object.entries(rawTimes)) {
+      if (Array.isArray(v)) normalized[k] = [...v];
+      else if (typeof v === 'string' && v) normalized[k] = [v];
+    }
+    setEditScheduledTimes(normalized);
     setOpenCategories({});
   }
 
@@ -227,49 +234,75 @@ export default function MembersPage() {
                                     max={99}
                                     title="優先順位（1=最優先、小さいほど優先）"
                                   />
-                                  <div className="flex items-center gap-0.5 w-36">
-                                    <select
-                                      value={(editScheduledTimes[td.name] || '').split('-')[0] || ''}
-                                      onChange={e => {
-                                        const startVal = e.target.value;
-                                        if (startVal === '') {
-                                          const nt = { ...editScheduledTimes }; delete nt[td.name]; setEditScheduledTimes(nt);
-                                        } else {
-                                          const current = editScheduledTimes[td.name] || '';
-                                          const endVal = current.split('-')[1] || '';
-                                          // Auto-set end to start + 15min if not set
-                                          const autoEnd = endVal || (() => {
-                                            const idx = timeSlotOptions.indexOf(startVal);
-                                            return idx >= 0 && idx < timeSlotOptions.length - 1 ? timeSlotOptions[idx + 1] : startVal;
-                                          })();
-                                          setEditScheduledTimes({ ...editScheduledTimes, [td.name]: `${startVal}-${autoEnd}` });
-                                        }
+                                  <div className="w-36 space-y-0.5">
+                                    {(editScheduledTimes[td.name] || []).map((range, ri) => {
+                                      const [startVal, endVal] = range.split('-');
+                                      return (
+                                        <div key={ri} className="flex items-center gap-0.5">
+                                          <select
+                                            value={startVal || ''}
+                                            onChange={e => {
+                                              const sv = e.target.value;
+                                              const arr = [...(editScheduledTimes[td.name] || [])];
+                                              if (sv === '') {
+                                                arr.splice(ri, 1);
+                                              } else {
+                                                const ev = endVal || (() => {
+                                                  const idx = timeSlotOptions.indexOf(sv);
+                                                  return idx >= 0 && idx < timeSlotOptions.length - 1 ? timeSlotOptions[idx + 1] : sv;
+                                                })();
+                                                arr[ri] = `${sv}-${ev}`;
+                                              }
+                                              const nt = { ...editScheduledTimes };
+                                              if (arr.length === 0) delete nt[td.name]; else nt[td.name] = arr;
+                                              setEditScheduledTimes(nt);
+                                            }}
+                                            className="w-[55px] border rounded px-0 py-0.5 text-[9px] text-center"
+                                          >
+                                            <option value="">--</option>
+                                            {timeSlotOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                                          </select>
+                                          <span className="text-[9px] text-gray-400">～</span>
+                                          <select
+                                            value={endVal || ''}
+                                            onChange={e => {
+                                              const ev = e.target.value;
+                                              const arr = [...(editScheduledTimes[td.name] || [])];
+                                              if (!startVal || ev === '') {
+                                                arr.splice(ri, 1);
+                                              } else {
+                                                arr[ri] = `${startVal}-${ev}`;
+                                              }
+                                              const nt = { ...editScheduledTimes };
+                                              if (arr.length === 0) delete nt[td.name]; else nt[td.name] = arr;
+                                              setEditScheduledTimes(nt);
+                                            }}
+                                            className="w-[55px] border rounded px-0 py-0.5 text-[9px] text-center"
+                                          >
+                                            <option value="">--</option>
+                                            {timeSlotOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                                          </select>
+                                          <button
+                                            onClick={() => {
+                                              const arr = [...(editScheduledTimes[td.name] || [])];
+                                              arr.splice(ri, 1);
+                                              const nt = { ...editScheduledTimes };
+                                              if (arr.length === 0) delete nt[td.name]; else nt[td.name] = arr;
+                                              setEditScheduledTimes(nt);
+                                            }}
+                                            className="text-red-400 hover:text-red-600 text-[9px] px-0.5"
+                                            title="削除"
+                                          >×</button>
+                                        </div>
+                                      );
+                                    })}
+                                    <button
+                                      onClick={() => {
+                                        const arr = [...(editScheduledTimes[td.name] || []), ''];
+                                        setEditScheduledTimes({ ...editScheduledTimes, [td.name]: arr });
                                       }}
-                                      className="w-[65px] border rounded px-0.5 py-1 text-[10px] text-center"
-                                      title="開始時間"
-                                    >
-                                      <option value="">--</option>
-                                      {timeSlotOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                                    </select>
-                                    <span className="text-[10px] text-gray-400">～</span>
-                                    <select
-                                      value={(editScheduledTimes[td.name] || '').split('-')[1] || ''}
-                                      onChange={e => {
-                                        const endVal = e.target.value;
-                                        const current = editScheduledTimes[td.name] || '';
-                                        const startVal = current.split('-')[0] || '';
-                                        if (!startVal || endVal === '') {
-                                          const nt = { ...editScheduledTimes }; delete nt[td.name]; setEditScheduledTimes(nt);
-                                        } else {
-                                          setEditScheduledTimes({ ...editScheduledTimes, [td.name]: `${startVal}-${endVal}` });
-                                        }
-                                      }}
-                                      className="w-[65px] border rounded px-0.5 py-1 text-[10px] text-center"
-                                      title="終了時間"
-                                    >
-                                      <option value="">--</option>
-                                      {timeSlotOptions.map(t => <option key={t} value={t}>{t}</option>)}
-                                    </select>
+                                      className="text-[9px] text-blue-600 hover:underline"
+                                    >+ 時間追加</button>
                                   </div>
                                 </>
                               )}
@@ -290,15 +323,19 @@ export default function MembersPage() {
                   {skills.map(skill => {
                     const speed = member.speedRatings[skill];
                     const priority = (member.priorityRatings || {})[skill];
-                    const scheduledTime = (member.scheduledTimeRatings || {})[skill];
+                    const rawScheduledTime = (member.scheduledTimeRatings || {})[skill];
+                    // Normalize: old format was string, new is string[]
+                    const scheduledTimes: string[] = Array.isArray(rawScheduledTime)
+                      ? rawScheduledTime
+                      : (typeof rawScheduledTime === 'string' && rawScheduledTime ? [rawScheduledTime] : []);
                     return (
                       <span key={skill} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-xs mr-1 mb-1">
                         {skill.replace(/^【[^】]+】/, '')}
-                        {(speed != null || priority != null || scheduledTime) && (
+                        {(speed != null || priority != null || scheduledTimes.length > 0) && (
                           <span className="text-green-400">
                             ({speed != null ? `${speed}分` : '-'}
                             {priority != null ? ` P${priority}` : ''}
-                            {scheduledTime ? ` @${scheduledTime.replace('-', '～')}` : ''})
+                            {scheduledTimes.length > 0 ? ` ${scheduledTimes.map(t => `@${t.replace('-', '～')}`).join(' ')}` : ''})
                           </span>
                         )}
                       </span>
