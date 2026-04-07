@@ -43,7 +43,7 @@ export default function DailyPage() {
   const [tasks, setTasksState] = useState<DailyTask[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [taskDefs, setTaskDefsState] = useState<TaskDefinition[]>(DEFAULT_TASKS);
-  const [viewTab, setViewTab] = useState<'plan' | 'actual'>('plan');
+  const [viewTab, setViewTab] = useState<'plan' | 'actual' | 'review'>('plan');
 
   // Timeline state
   const [timelineData, setTimelineDataState] = useState<Record<string, Record<string, string>>>({});
@@ -518,6 +518,12 @@ export default function DailyPage() {
               viewTab === 'actual' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'
             }`}
           >実績入力・集計</button>
+          <button
+            onClick={() => setViewTab('review')}
+            className={`px-6 py-2 text-sm font-semibold border-b-2 transition-colors ${
+              viewTab === 'review' ? 'border-amber-600 text-amber-700' : 'border-transparent text-gray-500 hover:text-gray-700'
+            }`}
+          >振り返り</button>
         </div>
 
         {/* Plan Tab */}
@@ -688,8 +694,367 @@ export default function DailyPage() {
           </div>
         )}
 
-        {/* Per-person Timeline with 15-min clickable blocks */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+        {/* Review Tab - AI振り返り分析 */}
+        {viewTab === 'review' && (() => {
+          // --- 画像査定 evaluation ---
+          const imageAssessmentPlanMinutes = tasks
+            .filter(t => t.taskName === '【LINE】画像査定')
+            .reduce((s, t) => s + t.plannedMinutes, 0);
+          const imageAssessmentActualMinutes = actualTimelineAggregation['【LINE】画像査定']?.totalMinutes || 0;
+          const imageGap = imageAssessmentActualMinutes - imageAssessmentPlanMinutes;
+          const imageRate = imageAssessmentPlanMinutes > 0 ? Math.round((imageAssessmentActualMinutes / imageAssessmentPlanMinutes) * 100) : 0;
+
+          // --- 実査定 evaluation ---
+          const realAssessmentPlanMinutes = tasks
+            .filter(t => t.taskName === '【査定】計算書作成')
+            .reduce((s, t) => s + t.plannedMinutes, 0);
+          const realAssessmentActualMinutes = actualTimelineAggregation['【査定】計算書作成']?.totalMinutes || 0;
+          const realGap = realAssessmentActualMinutes - realAssessmentPlanMinutes;
+          const realRate = realAssessmentPlanMinutes > 0 ? Math.round((realAssessmentActualMinutes / realAssessmentPlanMinutes) * 100) : 0;
+
+          // --- 抜け漏れ業務 (tasks in actuals but not in plan) ---
+          const plannedTaskNames = new Set(tasks.map(t => t.taskName));
+          const actualTaskNames = Object.keys(actualTimelineAggregation);
+          const missingFromPlan = actualTaskNames.filter(tn => !plannedTaskNames.has(tn));
+
+          // --- Per-member GAP analysis ---
+          const memberGapAnalysis = memberTimelineSummary.map(ms => {
+            const actualBlocks = actualTimelineData[ms.member.id] || {};
+            const actualTaskBreakdown: Record<string, number> = {};
+            Object.values(actualBlocks).forEach(taskName => {
+              actualTaskBreakdown[taskName] = (actualTaskBreakdown[taskName] || 0) + 15;
+            });
+
+            // Task-level gaps
+            const allTasks = new Set([...Object.keys(ms.taskBreakdown), ...Object.keys(actualTaskBreakdown)]);
+            const taskGaps = Array.from(allTasks).map(tn => ({
+              taskName: tn,
+              planned: ms.taskBreakdown[tn] || 0,
+              actual: actualTaskBreakdown[tn] || 0,
+              gap: (actualTaskBreakdown[tn] || 0) - (ms.taskBreakdown[tn] || 0),
+            })).sort((a, b) => Math.abs(b.gap) - Math.abs(a.gap));
+
+            return {
+              ...ms,
+              actualTaskBreakdown,
+              taskGaps,
+            };
+          });
+
+          // --- Overall score ---
+          const overallPlanRate = totalRequiredMinutes > 0
+            ? Math.round((totalActualMinutes / totalRequiredMinutes) * 100) : 0;
+
+          // --- Improvement suggestions ---
+          const suggestions: string[] = [];
+
+          if (totalActualMinutes > totalRequiredMinutes * 1.2) {
+            suggestions.push('実績が計画を大幅に超過しています。タスクの見積もり精度を見直し、バッファを多めに設定することを検討してください。');
+          } else if (totalActualMinutes < totalRequiredMinutes * 0.8) {
+            suggestions.push('実績が計画を大きく下回っています。予定の見積もりが過大な可能性があります。実態に合わせた見積もり調整を検討してください。');
+          }
+
+          if (missingFromPlan.length > 0) {
+            suggestions.push(`予定にない業務が${missingFromPlan.length}件発生しています（${missingFromPlan.map(n => n.replace(/^【[^】]+】/, '')).join('、')}）。翌日以降の予定に組み込むことを検討してください。`);
+          }
+
+          if (imageAssessmentPlanMinutes > 0 && imageRate < 80) {
+            suggestions.push('画像査定の実績が計画の80%未満です。担当者のスキルアップや業務フローの効率化を検討してください。');
+          } else if (imageAssessmentPlanMinutes > 0 && imageRate > 120) {
+            suggestions.push('画像査定の実績が計画を大幅に超過しています。計画時の件数見積もりを上方修正することを推奨します。');
+          }
+
+          if (realAssessmentPlanMinutes > 0 && realRate < 80) {
+            suggestions.push('実査定の実績が計画の80%未満です。査定プロセスの見直しや人員配置の最適化を検討してください。');
+          } else if (realAssessmentPlanMinutes > 0 && realRate > 120) {
+            suggestions.push('実査定の実績が計画を大幅に超過しています。翌日以降の計画に反映させてください。');
+          }
+
+          // Member-specific suggestions
+          memberGapAnalysis.forEach(mg => {
+            const utilization = mg.shiftMinutes > 0 ? Math.round((mg.actualMinutes / mg.shiftMinutes) * 100) : 0;
+            if (utilization < 60 && mg.shiftMinutes > 0) {
+              suggestions.push(`${mg.member.name}さんのシフト稼働率が${utilization}%と低めです。業務の追加割り当てやスキル拡充を検討してください。`);
+            }
+            if (mg.actualMinutes > mg.shiftMinutes && mg.shiftMinutes > 0) {
+              suggestions.push(`${mg.member.name}さんの実績がシフト時間を超過しています。業務負荷の分散を検討してください。`);
+            }
+          });
+
+          if (suggestions.length === 0) {
+            suggestions.push('本日の業務は概ね計画通りに遂行されました。引き続き同水準の計画精度を維持してください。');
+          }
+
+          const hasData = totalRequiredMinutes > 0 || totalActualMinutes > 0;
+
+          return (
+            <div className="space-y-6">
+              {!hasData ? (
+                <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center text-gray-400">
+                  予定または実績データがありません。データを入力してから振り返りをご確認ください。
+                </div>
+              ) : (
+                <>
+                  {/* Overall Score */}
+                  <div className="bg-white rounded-xl shadow-sm border border-amber-200 p-6">
+                    <h3 className="text-sm font-bold text-amber-700 mb-4 flex items-center gap-2">
+                      <span className="w-1.5 h-5 bg-amber-500 rounded-full" />
+                      総合評価
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-500 mb-1">計画達成率</p>
+                        <p className={`text-2xl font-bold ${overallPlanRate >= 90 && overallPlanRate <= 110 ? 'text-green-600' : overallPlanRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
+                          {overallPlanRate}%
+                        </p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-500 mb-1">予定時間</p>
+                        <p className="text-2xl font-bold text-gray-700">{totalRequiredMinutes}分</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-500 mb-1">実績時間</p>
+                        <p className="text-2xl font-bold text-blue-700">{totalActualMinutes}分</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-[10px] text-gray-500 mb-1">差分</p>
+                        <p className={`text-2xl font-bold ${(totalActualMinutes - totalRequiredMinutes) > 0 ? 'text-red-500' : (totalActualMinutes - totalRequiredMinutes) < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                          {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{totalActualMinutes - totalRequiredMinutes}分
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 画像査定 & 実査定 Evaluation */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5">
+                      <h3 className="text-sm font-bold text-purple-700 mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-5 bg-purple-500 rounded-full" />
+                        画像査定 評価
+                      </h3>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">予定件数</span>
+                          <span className="font-bold">{imageAssessmentPlannedPoints}点</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">予定時間</span>
+                          <span className="font-bold">{imageAssessmentPlanMinutes}分</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">実績時間</span>
+                          <span className="font-bold text-blue-700">{imageAssessmentActualMinutes}分</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">達成率</span>
+                          <span className={`font-bold ${imageRate >= 90 && imageRate <= 110 ? 'text-green-600' : imageRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
+                            {imageAssessmentPlanMinutes > 0 ? `${imageRate}%` : '-'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">差分</span>
+                          <span className={`font-bold ${imageGap > 0 ? 'text-red-500' : imageGap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                            {imageGap > 0 ? '+' : ''}{imageGap}分
+                          </span>
+                        </div>
+                        {/* Members working on image assessment */}
+                        {actualTimelineAggregation['【LINE】画像査定']?.members && (
+                          <div className="pt-2 border-t border-purple-100">
+                            <p className="text-[10px] text-gray-500 mb-1">担当者別実績</p>
+                            {Object.entries(actualTimelineAggregation['【LINE】画像査定'].members).map(([mid, mins]) => {
+                              const member = members.find(m => m.id === mid);
+                              return (
+                                <div key={mid} className="flex justify-between text-[10px]">
+                                  <span className="text-gray-600">{member?.name || mid}</span>
+                                  <span className="font-bold">{mins}分</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-white rounded-xl shadow-sm border border-rose-200 p-5">
+                      <h3 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-5 bg-rose-500 rounded-full" />
+                        実査定 評価
+                      </h3>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">計算書作成 予定件数</span>
+                          <span className="font-bold">{realAssessmentPoints}点</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">郵送物開封 予定件数</span>
+                          <span className="font-bold">{realAssessmentCount}件</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">予定時間</span>
+                          <span className="font-bold">{realAssessmentPlanMinutes}分</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">実績時間</span>
+                          <span className="font-bold text-blue-700">{realAssessmentActualMinutes}分</span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">達成率</span>
+                          <span className={`font-bold ${realRate >= 90 && realRate <= 110 ? 'text-green-600' : realRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
+                            {realAssessmentPlanMinutes > 0 ? `${realRate}%` : '-'}
+                          </span>
+                        </div>
+                        <div className="flex justify-between text-xs">
+                          <span className="text-gray-500">差分</span>
+                          <span className={`font-bold ${realGap > 0 ? 'text-red-500' : realGap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                            {realGap > 0 ? '+' : ''}{realGap}分
+                          </span>
+                        </div>
+                        {actualTimelineAggregation['【査定】計算書作成']?.members && (
+                          <div className="pt-2 border-t border-rose-100">
+                            <p className="text-[10px] text-gray-500 mb-1">担当者別実績</p>
+                            {Object.entries(actualTimelineAggregation['【査定】計算書作成'].members).map(([mid, mins]) => {
+                              const member = members.find(m => m.id === mid);
+                              return (
+                                <div key={mid} className="flex justify-between text-[10px]">
+                                  <span className="text-gray-600">{member?.name || mid}</span>
+                                  <span className="font-bold">{mins}分</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 抜け漏れ業務 */}
+                  <div className="bg-white rounded-xl shadow-sm border border-orange-200 p-5">
+                    <h3 className="text-sm font-bold text-orange-700 mb-3 flex items-center gap-2">
+                      <span className="w-1.5 h-5 bg-orange-500 rounded-full" />
+                      抜け漏れ業務（予定にない実績）
+                    </h3>
+                    {missingFromPlan.length === 0 ? (
+                      <p className="text-xs text-gray-400">予定にない業務はありませんでした。</p>
+                    ) : (
+                      <div className="space-y-2">
+                        {missingFromPlan.map(tn => {
+                          const actual = actualTimelineAggregation[tn];
+                          return (
+                            <div key={tn} className="flex items-center justify-between bg-orange-50 rounded-lg px-4 py-2">
+                              <div className="flex items-center gap-2">
+                                <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(tn) }} />
+                                <span className="text-xs font-medium text-gray-800">{tn}</span>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-xs text-orange-700 font-bold">{actual?.totalMinutes || 0}分</span>
+                                <div className="flex gap-1">
+                                  {Object.entries(actual?.members || {}).map(([mid, mins]) => {
+                                    const member = members.find(m => m.id === mid);
+                                    return (
+                                      <span key={mid} className="text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded">
+                                        {member?.name || mid}: {mins}分
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Per-member GAP Analysis */}
+                  <div className="bg-white rounded-xl shadow-sm border border-indigo-200 p-5">
+                    <h3 className="text-sm font-bold text-indigo-700 mb-3 flex items-center gap-2">
+                      <span className="w-1.5 h-5 bg-indigo-500 rounded-full" />
+                      個人別 予定 vs 実績 GAP分析
+                    </h3>
+                    {memberGapAnalysis.length === 0 ? (
+                      <p className="text-xs text-gray-400">メンバーデータがありません。</p>
+                    ) : (
+                      <div className="space-y-4">
+                        {memberGapAnalysis.map(mg => {
+                          const utilization = mg.shiftMinutes > 0 ? Math.round((mg.actualMinutes / mg.shiftMinutes) * 100) : 0;
+                          const planRate = mg.plannedMinutes > 0 ? Math.round((mg.actualMinutes / mg.plannedMinutes) * 100) : 0;
+                          return (
+                            <div key={mg.member.id} className="bg-indigo-50/50 rounded-lg p-4">
+                              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
+                                <p className="text-xs font-bold text-gray-800">{mg.member.name}</p>
+                                <div className="flex gap-3 text-[10px]">
+                                  <span className="px-2 py-0.5 bg-gray-100 rounded">シフト: {mg.shiftMinutes}分</span>
+                                  <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded">予定: {mg.plannedMinutes}分</span>
+                                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded">実績: {mg.actualMinutes}分</span>
+                                  <span className={`px-2 py-0.5 rounded ${planRate >= 90 && planRate <= 110 ? 'bg-green-100 text-green-700' : planRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
+                                    達成率: {mg.plannedMinutes > 0 ? `${planRate}%` : '-'}
+                                  </span>
+                                  <span className={`px-2 py-0.5 rounded ${utilization >= 60 && utilization <= 100 ? 'bg-green-100 text-green-700' : utilization > 100 ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}`}>
+                                    稼働率: {mg.shiftMinutes > 0 ? `${utilization}%` : '-'}
+                                  </span>
+                                </div>
+                              </div>
+                              {mg.taskGaps.length > 0 && (
+                                <div className="overflow-x-auto">
+                                  <table className="w-full text-[10px]">
+                                    <thead>
+                                      <tr className="text-left text-gray-500">
+                                        <th className="pb-1 pr-3">業務名</th>
+                                        <th className="pb-1 pr-3 text-right">予定</th>
+                                        <th className="pb-1 pr-3 text-right">実績</th>
+                                        <th className="pb-1 text-right">差分</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {mg.taskGaps.map(tg => (
+                                        <tr key={tg.taskName} className="border-t border-indigo-100">
+                                          <td className="py-1 pr-3">
+                                            <div className="flex items-center gap-1">
+                                              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(tg.taskName) }} />
+                                              <span className="text-gray-700">{tg.taskName.replace(/^【[^】]+】/, '')}</span>
+                                            </div>
+                                          </td>
+                                          <td className="py-1 pr-3 text-right text-gray-600">{tg.planned}分</td>
+                                          <td className="py-1 pr-3 text-right text-blue-700 font-bold">{tg.actual}分</td>
+                                          <td className={`py-1 text-right font-bold ${tg.gap > 0 ? 'text-red-500' : tg.gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                                            {tg.gap > 0 ? '+' : ''}{tg.gap}分
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Improvement Suggestions */}
+                  <div className="bg-white rounded-xl shadow-sm border border-green-200 p-5">
+                    <h3 className="text-sm font-bold text-green-700 mb-3 flex items-center gap-2">
+                      <span className="w-1.5 h-5 bg-green-500 rounded-full" />
+                      翌日以降の改善提案
+                    </h3>
+                    <div className="space-y-2">
+                      {suggestions.map((s, i) => (
+                        <div key={i} className="flex items-start gap-2 bg-green-50 rounded-lg px-4 py-3">
+                          <span className="text-green-600 text-xs font-bold mt-0.5">{i + 1}.</span>
+                          <p className="text-xs text-gray-700 leading-relaxed">{s}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* Per-person Timeline with 15-min clickable blocks (hidden on review tab) */}
+        {viewTab !== 'review' && <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
             <h3 className="text-sm font-semibold text-gray-600">個人別タイムライン（15分単位 / クリックで入力）</h3>
             <div className="flex items-center gap-2">
@@ -824,7 +1189,7 @@ export default function DailyPage() {
               </div>
             </div>
           )}
-        </div>
+        </div>}
       </div>
     </DashboardLayout>
   );
