@@ -12,6 +12,7 @@ export default function MembersPage() {
   const [editSkills, setEditSkills] = useState<string[]>([]);
   const [editSpeeds, setEditSpeeds] = useState<Record<string, number>>({});
   const [editPriorities, setEditPriorities] = useState<Record<string, number>>({});
+  const [editScheduledTimes, setEditScheduledTimes] = useState<Record<string, string>>({});
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
   const [matrixCategory, setMatrixCategory] = useState<string>(TASK_CATEGORIES[0]);
@@ -32,13 +33,14 @@ export default function MembersPage() {
     setEditSkills([...member.skills]);
     setEditSpeeds({ ...member.speedRatings });
     setEditPriorities({ ...(member.priorityRatings || {}) });
+    setEditScheduledTimes({ ...(member.scheduledTimeRatings || {}) });
     setOpenCategories({});
   }
 
   function saveEdit(memberId: string) {
     const updated = getMembers().map(m => {
       if (m.id !== memberId) return m;
-      return { ...m, skills: editSkills, speedRatings: editSpeeds, priorityRatings: editPriorities };
+      return { ...m, skills: editSkills, speedRatings: editSpeeds, priorityRatings: editPriorities, scheduledTimeRatings: editScheduledTimes };
     });
     setMembers(updated);
     setMembersList(updated);
@@ -55,6 +57,9 @@ export default function MembersPage() {
       const newPriorities = { ...editPriorities };
       delete newPriorities[skill];
       setEditPriorities(newPriorities);
+      const newTimes = { ...editScheduledTimes };
+      delete newTimes[skill];
+      setEditScheduledTimes(newTimes);
     } else {
       setEditSkills([...editSkills, skill]);
     }
@@ -72,9 +77,11 @@ export default function MembersPage() {
       setEditSkills(editSkills.filter(s => !names.includes(s)));
       const newSpeeds = { ...editSpeeds };
       const newPriorities = { ...editPriorities };
-      names.forEach(n => { delete newSpeeds[n]; delete newPriorities[n]; });
+      const newTimes = { ...editScheduledTimes };
+      names.forEach(n => { delete newSpeeds[n]; delete newPriorities[n]; delete newTimes[n]; });
       setEditSpeeds(newSpeeds);
       setEditPriorities(newPriorities);
+      setEditScheduledTimes(newTimes);
     } else {
       const newSkills = [...editSkills];
       tasksInCat.forEach(t => {
@@ -130,7 +137,7 @@ export default function MembersPage() {
 
         <div className="mt-3">
           <p className="text-xs font-semibold text-gray-500 mb-2">
-            対応可能業務{isEditing ? '' : '（時間 / 優先順位）'}
+            対応可能業務{isEditing ? '' : '（時間 / 優先順位 / 実施時間）'}
           </p>
           {isEditing ? (
             <div className="space-y-2 max-h-[500px] overflow-y-auto">
@@ -139,6 +146,7 @@ export default function MembersPage() {
                 <span className="flex-1">業務名</span>
                 <span className="w-16 text-center">時間(分)</span>
                 <span className="w-16 text-center">優先順位</span>
+                <span className="w-20 text-center">実施時間</span>
               </div>
               {TASK_CATEGORIES.map(cat => {
                 const catTasks = tasksByCategory[cat] || [];
@@ -207,6 +215,20 @@ export default function MembersPage() {
                                     max={99}
                                     title="優先順位（1=最優先、小さいほど優先）"
                                   />
+                                  <input
+                                    type="time"
+                                    value={editScheduledTimes[td.name] ?? ''}
+                                    onChange={e => {
+                                      const val = e.target.value;
+                                      if (val === '') {
+                                        const nt = { ...editScheduledTimes }; delete nt[td.name]; setEditScheduledTimes(nt);
+                                      } else {
+                                        setEditScheduledTimes({ ...editScheduledTimes, [td.name]: val });
+                                      }
+                                    }}
+                                    className="w-20 border rounded px-1 py-1 text-xs text-center"
+                                    title="実施時間（この時間に固定配置されます）"
+                                  />
                                 </>
                               )}
                             </div>
@@ -226,13 +248,15 @@ export default function MembersPage() {
                   {skills.map(skill => {
                     const speed = member.speedRatings[skill];
                     const priority = (member.priorityRatings || {})[skill];
+                    const scheduledTime = (member.scheduledTimeRatings || {})[skill];
                     return (
                       <span key={skill} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-50 text-green-700 rounded text-xs mr-1 mb-1">
                         {skill.replace(/^【[^】]+】/, '')}
-                        {(speed != null || priority != null) && (
+                        {(speed != null || priority != null || scheduledTime) && (
                           <span className="text-green-400">
                             ({speed != null ? `${speed}分` : '-'}
-                            {priority != null ? ` P${priority}` : ''})
+                            {priority != null ? ` P${priority}` : ''}
+                            {scheduledTime ? ` @${scheduledTime}` : ''})
                           </span>
                         )}
                       </span>
@@ -256,8 +280,8 @@ export default function MembersPage() {
         <h1 className="text-2xl font-bold text-gray-800">業務及びメンバー管理</h1>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 text-sm text-yellow-800">
-          <strong>優先順位の設定方法：</strong>各メンバーの「編集」→ 業務を選択後、<strong>時間（分）</strong>と<strong>優先順位</strong>を入力してください。
-          優先順位は <strong>1が最優先</strong>（数字が小さいほど優先的に割り振られます）。自動割振で活用されます。
+          <strong>設定方法：</strong>各メンバーの「編集」→ 業務を選択後、<strong>時間（分）</strong>・<strong>優先順位</strong>・<strong>実施時間</strong>を入力してください。
+          優先順位は <strong>1が最優先</strong>（数字が小さいほど優先的に割り振られます）。実施時間を設定すると、自動割振時にその時間に固定配置されます。
         </div>
 
         {/* Employees */}

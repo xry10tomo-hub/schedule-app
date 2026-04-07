@@ -16,16 +16,16 @@ import type {
 // ============ Default Data ============
 
 export const DEFAULT_MEMBERS: Member[] = [
-  { id: 'wada', name: '和田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'ushioda', name: '潮田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'kunigane', name: '国兼', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'kumagai', name: '熊谷', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'suzuki', name: '鈴木', role: 'employee', isAdmin: true, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'mihara', name: '三原', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'nakatani', name: '中谷', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'sato', name: '佐藤', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'ishii', name: '石井', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
-  { id: 'kagami', name: '加々美', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, email: '' },
+  { id: 'wada', name: '和田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'ushioda', name: '潮田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'kunigane', name: '国兼', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'kumagai', name: '熊谷', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'suzuki', name: '鈴木', role: 'employee', isAdmin: true, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'mihara', name: '三原', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'nakatani', name: '中谷', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'sato', name: '佐藤', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'ishii', name: '石井', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'kagami', name: '加々美', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
 ];
 
 // Task categories for grouping in dropdowns
@@ -198,6 +198,7 @@ export const STORAGE_KEYS = {
   currentUser: 'schedule_current_user',
   taskResources: 'schedule_task_resources',
   timeline: 'schedule_timeline',
+  actualTimeline: 'schedule_actual_timeline',
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -210,6 +211,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.tasks,
   STORAGE_KEYS.taskResources,
   STORAGE_KEYS.timeline,
+  STORAGE_KEYS.actualTimeline,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {
@@ -299,6 +301,22 @@ export function setTimelineForDate(date: string, blocks: Record<string, Record<s
   const all = getTimelineBlocks();
   all[date] = blocks;
   setTimelineBlocks(all);
+}
+
+// Actual Timeline blocks: { [date]: { [memberId]: { [blockIndex]: taskName } } }
+export function getActualTimelineBlocks(): Record<string, Record<string, Record<string, string>>> {
+  return getFromStorage(STORAGE_KEYS.actualTimeline, {});
+}
+export function setActualTimelineBlocks(data: Record<string, Record<string, Record<string, string>>>) {
+  setToStorage(STORAGE_KEYS.actualTimeline, data);
+}
+export function getActualTimelineForDate(date: string): Record<string, Record<string, string>> {
+  return getActualTimelineBlocks()[date] || {};
+}
+export function setActualTimelineForDate(date: string, blocks: Record<string, Record<string, string>>) {
+  const all = getActualTimelineBlocks();
+  all[date] = blocks;
+  setActualTimelineBlocks(all);
 }
 
 export function getCurrentUser(): string {

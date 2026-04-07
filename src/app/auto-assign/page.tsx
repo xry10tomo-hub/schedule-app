@@ -97,11 +97,46 @@ function runAutoAssignAlgorithm(
     }
   });
 
-  // ===== Step 2: Prepare assignable tasks =====
+  // ===== Step 2: Place tasks with scheduled times (実施時間) first =====
+  const scheduledTasksHandled = new Set<string>(); // track task names already placed by scheduled time
+
+  for (const task of tasks) {
+    if (task.taskName === BREAK_TASK_NAME) continue;
+    const blocksNeeded = Math.max(1, Math.ceil(task.plannedMinutes / 15));
+
+    // Find members who have a scheduledTime for this task
+    const membersWithScheduledTime = activeMembers.filter(m => {
+      const st = (m.scheduledTimeRatings || {})[task.taskName];
+      return st && m.skills.includes(task.taskName);
+    });
+
+    for (const member of membersWithScheduledTime) {
+      const scheduledTime = (member.scheduledTimeRatings || {})[task.taskName];
+      if (!scheduledTime) continue;
+
+      const [h, min] = scheduledTime.split(':').map(Number);
+      const startBlock = Math.floor(((h * 60 + min) - TIMELINE_START * 60) / 15);
+      if (startBlock < 0 || startBlock >= TOTAL_BLOCKS) continue;
+
+      // Place blocks starting at the scheduled time
+      let placed = 0;
+      for (let b = startBlock; b < TOTAL_BLOCKS && placed < blocksNeeded; b++) {
+        if (memberAvailableBlocks[member.id]?.includes(b)) {
+          timeline[member.id][String(b)] = task.taskName;
+          memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== b);
+          placed++;
+        }
+      }
+      if (placed > 0) scheduledTasksHandled.add(task.taskName);
+    }
+  }
+
+  // ===== Step 3: Prepare remaining assignable tasks =====
   const assignableTasks: AssignableTask[] = [];
 
   for (const task of tasks) {
-    if (task.taskName === BREAK_TASK_NAME) continue; // handled above
+    if (task.taskName === BREAK_TASK_NAME) continue;
+    if (scheduledTasksHandled.has(task.taskName)) continue; // already handled by scheduled time
 
     const blocksNeeded = Math.max(1, Math.ceil(task.plannedMinutes / 15));
 
@@ -132,7 +167,7 @@ function runAutoAssignAlgorithm(
     return b.blocksNeeded - a.blocksNeeded;
   });
 
-  // ===== Step 3: Assign tasks to timeline =====
+  // ===== Step 4: Assign remaining tasks to timeline =====
   for (const task of assignableTasks) {
     let remaining = task.blocksNeeded;
 
@@ -389,6 +424,7 @@ export default function AutoAssignPage() {
                     <th className="px-3 py-2 font-medium">担当者</th>
                     <th className="px-3 py-2 font-medium">対応可能メンバー</th>
                     <th className="px-3 py-2 font-medium">最高優先</th>
+                    <th className="px-3 py-2 font-medium">実施時間</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -427,6 +463,22 @@ export default function AutoAssignPage() {
                           ) : (
                             <span className="text-xs text-gray-400">-</span>
                           )}
+                        </td>
+                        <td className="px-3 py-2">
+                          {(() => {
+                            const scheduledTimes = capableMembers
+                              .map(m => ({ name: m.name, time: (m.scheduledTimeRatings || {})[t.taskName] }))
+                              .filter(x => x.time);
+                            return scheduledTimes.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {scheduledTimes.map(st => (
+                                  <span key={st.name} className="text-[10px] px-1.5 py-0.5 bg-orange-50 text-orange-700 rounded">
+                                    {st.name}@{st.time}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : <span className="text-xs text-gray-400">-</span>;
+                          })()}
                         </td>
                       </tr>
                     );
@@ -638,12 +690,13 @@ export default function AutoAssignPage() {
             <div className="space-y-2">
               <p><span className="font-bold text-green-700">1.</span> シフト登録済みメンバーの出勤時間を確認</p>
               <p><span className="font-bold text-green-700">2.</span> 全員に休憩を割当（11:30〜13:30の間に1時間）</p>
-              <p><span className="font-bold text-green-700">3.</span> 担当者が指定されたタスクを優先的に配置</p>
+              <p><span className="font-bold text-green-700">3.</span> 実施時間が設定されたタスクを指定時間に固定配置</p>
+              <p><span className="font-bold text-green-700">4.</span> 担当者が指定されたタスクを優先的に配置</p>
             </div>
             <div className="space-y-2">
-              <p><span className="font-bold text-green-700">4.</span> 未割当タスクを優先順位に基づきメンバーに配分</p>
-              <p><span className="font-bold text-green-700">5.</span> 同じ優先順位の場合、空き時間が多いメンバーに割当</p>
-              <p><span className="font-bold text-green-700">6.</span> 対応可能メンバーがいない場合は最も空きのあるメンバーに割当</p>
+              <p><span className="font-bold text-green-700">5.</span> 未割当タスクを優先順位に基づきメンバーに配分</p>
+              <p><span className="font-bold text-green-700">6.</span> 同じ優先順位の場合、空き時間が多いメンバーに割当</p>
+              <p><span className="font-bold text-green-700">7.</span> 対応可能メンバーがいない場合は最も空きのあるメンバーに割当</p>
             </div>
           </div>
           <div className="mt-3 p-3 bg-yellow-50 rounded-lg text-xs text-yellow-700">

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
 
 // Timeline constants
@@ -47,6 +47,7 @@ export default function DailyPage() {
 
   // Timeline state
   const [timelineData, setTimelineDataState] = useState<Record<string, Record<string, string>>>({});
+  const [actualTimelineData, setActualTimelineDataState] = useState<Record<string, Record<string, string>>>({});
   const [selectedPaintTask, setSelectedPaintTask] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
@@ -72,8 +73,11 @@ export default function DailyPage() {
     Object.values(timelineData).forEach(memberBlocks => {
       Object.values(memberBlocks).forEach(taskName => names.add(taskName));
     });
+    Object.values(actualTimelineData).forEach(memberBlocks => {
+      Object.values(memberBlocks).forEach(taskName => names.add(taskName));
+    });
     return Array.from(names).sort();
-  }, [tasks, timelineData]);
+  }, [tasks, timelineData, actualTimelineData]);
 
   function getTaskColor(taskName: string): string {
     const idx = uniqueTaskNames.indexOf(taskName);
@@ -135,6 +139,7 @@ export default function DailyPage() {
     const tasksForDate = syncMonthlyTasks();
     setTasksState(tasksForDate);
     setTimelineDataState(getTimelineForDate(selectedDate));
+    setActualTimelineDataState(getActualTimelineForDate(selectedDate));
   }, [syncMonthlyTasks, selectedDate, dataVersion]);
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
@@ -204,10 +209,11 @@ export default function DailyPage() {
         taskBreakdown[taskName] = (taskBreakdown[taskName] || 0) + 15;
       });
 
-      // Actual from daily tasks
-      const memberTasks = tasks.filter(t => t.assigneeId === m.id);
-      const actualMinutes = memberTasks.reduce((s, t) => s + t.actualMinutes, 0);
-      const actualCount = memberTasks.reduce((s, t) => s + t.actualCount, 0);
+      // Actual from actual timeline
+      const actualBlocks = actualTimelineData[m.id] || {};
+      const actualBlockCount = Object.keys(actualBlocks).length;
+      const actualMinutes = actualBlockCount * 15;
+      const actualCount = actualBlockCount; // block count as proxy
 
       // Shift info
       const shift = shiftsForDate.find(s => s.memberId === m.id);
@@ -227,7 +233,7 @@ export default function DailyPage() {
         remainingMinutes: shiftMinutes - plannedMinutes,
       };
     });
-  }, [activeMembers, timelineData, tasks, shiftsForDate]);
+  }, [activeMembers, timelineData, actualTimelineData, tasks, shiftsForDate]);
 
   // ===== Form handlers =====
   function handleAddTask() {
@@ -325,7 +331,20 @@ export default function DailyPage() {
     const [eh, em] = s.endTime.split(':').map(Number);
     return sum + (eh * 60 + em - sh * 60 - sm);
   }, 0);
-  const totalActualMinutes = tasks.reduce((s, t) => s + t.actualMinutes, 0);
+  // Aggregate actual from actual timeline across all members
+  const actualTimelineAggregation = useMemo(() => {
+    const taskTotals: Record<string, { totalMinutes: number; members: Record<string, number> }> = {};
+    Object.entries(actualTimelineData).forEach(([memberId, blocks]) => {
+      Object.values(blocks).forEach(taskName => {
+        if (!taskTotals[taskName]) taskTotals[taskName] = { totalMinutes: 0, members: {} };
+        taskTotals[taskName].totalMinutes += 15;
+        taskTotals[taskName].members[memberId] = (taskTotals[taskName].members[memberId] || 0) + 15;
+      });
+    });
+    return taskTotals;
+  }, [actualTimelineData]);
+
+  const totalActualMinutes = Object.values(actualTimelineAggregation).reduce((s, t) => s + t.totalMinutes, 0);
   const resourceBalance = availableResourceMinutes - totalRequiredMinutes;
 
   // 画像査定: planned points from 【LINE】画像査定 only
@@ -574,73 +593,97 @@ export default function DailyPage() {
           </div>
         )}
 
-        {/* Actual Tab */}
+        {/* Actual Tab - same layout as plan tab, data from actual timeline aggregation */}
         {viewTab === 'actual' && (
-          <div className="space-y-4">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-blue-50">
-                    <tr className="text-left text-gray-600">
-                      <th className="px-4 py-3 font-semibold">業務名</th>
-                      <th className="px-4 py-3 font-semibold">担当者</th>
-                      <th className="px-4 py-3 font-semibold">予定</th>
-                      <th className="px-4 py-3 font-semibold">実績件数</th>
-                      <th className="px-4 py-3 font-semibold">実績点数</th>
-                      <th className="px-4 py-3 font-semibold">実績時間(分)</th>
-                      <th className="px-4 py-3 font-semibold">状態</th>
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-blue-50">
+                  <tr className="text-left text-gray-600">
+                    <th className="px-4 py-3 font-semibold">業務名</th>
+                    <th className="px-4 py-3 font-semibold">予定時間(分)</th>
+                    <th className="px-4 py-3 font-semibold">実績時間(分)</th>
+                    <th className="px-4 py-3 font-semibold">差分</th>
+                    <th className="px-4 py-3 font-semibold">担当者（実績）</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    // Merge plan tasks with actual timeline data
+                    const allTaskNames = new Set<string>();
+                    tasks.forEach(t => allTaskNames.add(t.taskName));
+                    Object.keys(actualTimelineAggregation).forEach(tn => allTaskNames.add(tn));
+                    const sortedNames = Array.from(allTaskNames).sort();
+
+                    if (sortedNames.length === 0) {
+                      return (
+                        <tr><td colSpan={5} className="px-4 py-12 text-center text-gray-400">タスクがありません。各自がホーム画面で実績を入力すると、ここに集計されます。</td></tr>
+                      );
+                    }
+
+                    return sortedNames.map(taskName => {
+                      const planTask = tasks.find(t => t.taskName === taskName);
+                      const plannedMinutes = planTask?.plannedMinutes || 0;
+                      const actual = actualTimelineAggregation[taskName];
+                      const actualMinutes = actual?.totalMinutes || 0;
+                      const gap = actualMinutes - plannedMinutes;
+
+                      // Members who actually worked on this task
+                      const memberEntries = actual?.members || {};
+
+                      return (
+                        <tr key={taskName} className="border-b border-gray-50 hover:bg-blue-50/30">
+                          <td className="px-4 py-3 font-medium text-gray-800">
+                            <div className="flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                              <span className="text-xs">{taskName}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="text-xs text-gray-500">{plannedMinutes}分</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="font-bold text-blue-700 text-xs">{actualMinutes}分</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className={`text-xs font-semibold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                              {gap > 0 ? '+' : ''}{gap}分
+                            </span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-1">
+                              {Object.entries(memberEntries).map(([memberId, mins]) => {
+                                const member = members.find(m => m.id === memberId);
+                                return (
+                                  <span key={memberId} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">
+                                    {member?.name || memberId}: {mins}分
+                                  </span>
+                                );
+                              })}
+                              {Object.keys(memberEntries).length === 0 && (
+                                <span className="text-[10px] text-gray-400">未入力</span>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
+                  {(tasks.length > 0 || Object.keys(actualTimelineAggregation).length > 0) && (
+                    <tr className="bg-blue-50 font-bold">
+                      <td className="px-4 py-3 text-gray-700">合計</td>
+                      <td className="px-4 py-3 text-gray-700">{totalRequiredMinutes}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-4 py-3 text-blue-700">{totalActualMinutes}分 ({(totalActualMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-4 py-3">
+                        <span className={`${(totalActualMinutes - totalRequiredMinutes) > 0 ? 'text-red-500' : (totalActualMinutes - totalRequiredMinutes) < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                          {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{totalActualMinutes - totalRequiredMinutes}分
+                        </span>
+                      </td>
+                      <td className="px-4 py-3"></td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {tasks.length === 0 ? (
-                      <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">タスクがありません</td></tr>
-                    ) : (
-                      tasks.map(t => {
-                        const member = members.find(m => m.id === t.assigneeId);
-                        return (
-                          <tr key={t.id} className="border-b border-gray-50 hover:bg-blue-50/30">
-                            <td className="px-4 py-3 font-medium text-gray-800 text-xs">{t.taskName}</td>
-                            <td className="px-4 py-3 text-gray-600 text-xs">{member?.name || <span className="text-gray-400">未割当</span>}</td>
-                            <td className="px-4 py-3 text-xs text-gray-500">{t.plannedCount}回 / {t.plannedMinutes}分</td>
-                            <td className="px-4 py-3">
-                              <input type="number" value={t.actualCount} onChange={e => handleUpdateField(t.id, 'actualCount', Number(e.target.value))} className="w-16 border rounded px-2 py-1 text-sm" min={0} />
-                            </td>
-                            <td className="px-4 py-3">
-                              <input type="number" value={t.actualPoints} onChange={e => handleUpdateField(t.id, 'actualPoints', Number(e.target.value))} className="w-16 border rounded px-2 py-1 text-sm" min={0} />
-                            </td>
-                            <td className="px-4 py-3">
-                              <input type="number" value={t.actualMinutes} onChange={e => handleUpdateField(t.id, 'actualMinutes', Number(e.target.value))} className="w-16 border rounded px-2 py-1 text-sm" min={0} />
-                            </td>
-                            <td className="px-4 py-3">
-                              <select value={t.status} onChange={e => handleUpdateField(t.id, 'status', e.target.value)}
-                                className={`text-xs rounded-full px-2 py-1 font-medium border-0 ${
-                                  t.status === 'completed' ? 'bg-green-100 text-green-700' :
-                                  t.status === 'in_progress' ? 'bg-yellow-100 text-yellow-700' :
-                                  'bg-gray-100 text-gray-500'
-                                }`}>
-                                <option value="pending">未着手</option>
-                                <option value="in_progress">進行中</option>
-                                <option value="completed">完了</option>
-                              </select>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                    {tasks.length > 0 && (
-                      <tr className="bg-blue-50 font-bold">
-                        <td className="px-4 py-3 text-gray-700">合計</td>
-                        <td className="px-4 py-3"></td>
-                        <td className="px-4 py-3"></td>
-                        <td className="px-4 py-3 text-blue-700">{tasks.reduce((s, t) => s + t.actualCount, 0)}</td>
-                        <td className="px-4 py-3 text-blue-700">{tasks.reduce((s, t) => s + t.actualPoints, 0)}</td>
-                        <td className="px-4 py-3 text-blue-700">{totalActualMinutes}分</td>
-                        <td className="px-4 py-3"></td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         )}
