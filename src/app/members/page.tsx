@@ -15,6 +15,18 @@ export default function MembersPage() {
   const [editScheduledTimes, setEditScheduledTimes] = useState<Record<string, string>>({});
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
+  // 15-min time slot options for scheduled time range
+  const timeSlotOptions = (() => {
+    const slots: string[] = [];
+    for (let h = 8; h < 22; h++) {
+      for (let m = 0; m < 60; m += 15) {
+        slots.push(`${h}:${m.toString().padStart(2, '0')}`);
+      }
+    }
+    slots.push('22:00');
+    return slots;
+  })();
+
   const [matrixCategory, setMatrixCategory] = useState<string>(TASK_CATEGORIES[0]);
   const [matrixView, setMatrixView] = useState<'speed' | 'priority'>('speed');
 
@@ -146,7 +158,7 @@ export default function MembersPage() {
                 <span className="flex-1">業務名</span>
                 <span className="w-16 text-center">時間(分)</span>
                 <span className="w-16 text-center">優先順位</span>
-                <span className="w-20 text-center">実施時間</span>
+                <span className="w-36 text-center">実施時間</span>
               </div>
               {TASK_CATEGORIES.map(cat => {
                 const catTasks = tasksByCategory[cat] || [];
@@ -215,20 +227,50 @@ export default function MembersPage() {
                                     max={99}
                                     title="優先順位（1=最優先、小さいほど優先）"
                                   />
-                                  <input
-                                    type="time"
-                                    value={editScheduledTimes[td.name] ?? ''}
-                                    onChange={e => {
-                                      const val = e.target.value;
-                                      if (val === '') {
-                                        const nt = { ...editScheduledTimes }; delete nt[td.name]; setEditScheduledTimes(nt);
-                                      } else {
-                                        setEditScheduledTimes({ ...editScheduledTimes, [td.name]: val });
-                                      }
-                                    }}
-                                    className="w-20 border rounded px-1 py-1 text-xs text-center"
-                                    title="実施時間（この時間に固定配置されます）"
-                                  />
+                                  <div className="flex items-center gap-0.5 w-36">
+                                    <select
+                                      value={(editScheduledTimes[td.name] || '').split('-')[0] || ''}
+                                      onChange={e => {
+                                        const startVal = e.target.value;
+                                        if (startVal === '') {
+                                          const nt = { ...editScheduledTimes }; delete nt[td.name]; setEditScheduledTimes(nt);
+                                        } else {
+                                          const current = editScheduledTimes[td.name] || '';
+                                          const endVal = current.split('-')[1] || '';
+                                          // Auto-set end to start + 15min if not set
+                                          const autoEnd = endVal || (() => {
+                                            const idx = timeSlotOptions.indexOf(startVal);
+                                            return idx >= 0 && idx < timeSlotOptions.length - 1 ? timeSlotOptions[idx + 1] : startVal;
+                                          })();
+                                          setEditScheduledTimes({ ...editScheduledTimes, [td.name]: `${startVal}-${autoEnd}` });
+                                        }
+                                      }}
+                                      className="w-[65px] border rounded px-0.5 py-1 text-[10px] text-center"
+                                      title="開始時間"
+                                    >
+                                      <option value="">--</option>
+                                      {timeSlotOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                    <span className="text-[10px] text-gray-400">～</span>
+                                    <select
+                                      value={(editScheduledTimes[td.name] || '').split('-')[1] || ''}
+                                      onChange={e => {
+                                        const endVal = e.target.value;
+                                        const current = editScheduledTimes[td.name] || '';
+                                        const startVal = current.split('-')[0] || '';
+                                        if (!startVal || endVal === '') {
+                                          const nt = { ...editScheduledTimes }; delete nt[td.name]; setEditScheduledTimes(nt);
+                                        } else {
+                                          setEditScheduledTimes({ ...editScheduledTimes, [td.name]: `${startVal}-${endVal}` });
+                                        }
+                                      }}
+                                      className="w-[65px] border rounded px-0.5 py-1 text-[10px] text-center"
+                                      title="終了時間"
+                                    >
+                                      <option value="">--</option>
+                                      {timeSlotOptions.map(t => <option key={t} value={t}>{t}</option>)}
+                                    </select>
+                                  </div>
                                 </>
                               )}
                             </div>
@@ -256,7 +298,7 @@ export default function MembersPage() {
                           <span className="text-green-400">
                             ({speed != null ? `${speed}分` : '-'}
                             {priority != null ? ` P${priority}` : ''}
-                            {scheduledTime ? ` @${scheduledTime}` : ''})
+                            {scheduledTime ? ` @${scheduledTime.replace('-', '～')}` : ''})
                           </span>
                         )}
                       </span>

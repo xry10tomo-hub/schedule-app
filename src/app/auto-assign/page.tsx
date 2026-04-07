@@ -114,20 +114,24 @@ function runAutoAssignAlgorithm(
       const scheduledTime = (member.scheduledTimeRatings || {})[task.taskName];
       if (!scheduledTime) continue;
 
-      const [h, min] = scheduledTime.split(':').map(Number);
-      const startBlock = Math.floor(((h * 60 + min) - TIMELINE_START * 60) / 15);
-      if (startBlock < 0 || startBlock >= TOTAL_BLOCKS) continue;
+      // Parse range format "HH:mm-HH:mm"
+      const parts = scheduledTime.split('-');
+      if (parts.length !== 2) continue;
 
-      // Place blocks starting at the scheduled time
-      let placed = 0;
-      for (let b = startBlock; b < TOTAL_BLOCKS && placed < blocksNeeded; b++) {
+      const [startH, startM] = parts[0].split(':').map(Number);
+      const [endH, endM] = parts[1].split(':').map(Number);
+      const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
+      const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
+      if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
+
+      // Place blocks within the scheduled time range
+      for (let b = startBlock; b < Math.min(endBlock, TOTAL_BLOCKS); b++) {
         if (memberAvailableBlocks[member.id]?.includes(b)) {
           timeline[member.id][String(b)] = task.taskName;
           memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== b);
-          placed++;
         }
       }
-      if (placed > 0) scheduledTasksHandled.add(task.taskName);
+      scheduledTasksHandled.add(task.taskName);
     }
   }
 
@@ -473,7 +477,7 @@ export default function AutoAssignPage() {
                               <div className="flex flex-wrap gap-1">
                                 {scheduledTimes.map(st => (
                                   <span key={st.name} className="text-[10px] px-1.5 py-0.5 bg-orange-50 text-orange-700 rounded">
-                                    {st.name}@{st.time}
+                                    {st.name}@{st.time.replace('-', '～')}
                                   </span>
                                 ))}
                               </div>
