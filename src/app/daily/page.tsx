@@ -90,6 +90,12 @@ export default function DailyPage() {
     const existingDaily = getDailyTasks();
     const dailyForDate = existingDaily.filter(t => t.date === selectedDate);
 
+    // Get previous day's tasks for copying values
+    const prevDate = new Date(selectedDate + 'T00:00:00');
+    prevDate.setDate(prevDate.getDate() - 1);
+    const prevDateStr = prevDate.toLocaleDateString('en-CA');
+    const prevDayTasks = existingDaily.filter(t => t.date === prevDateStr);
+
     let added = false;
     const newTasks = [...existingDaily];
 
@@ -117,14 +123,18 @@ export default function DailyPage() {
       const alreadyExists = dailyForDate.some(t => t.taskName === taskName && t.comment === source);
       if (!alreadyExists) {
         const def = DEFAULT_TASKS.find(d => d.name === taskName);
+        // Copy values from previous day if available
+        const prevTask = prevDayTasks.find(t => t.taskName === taskName);
+        const plannedCount = prevTask?.plannedCount ?? 1;
+        const minutesPerUnit = prevTask?.minutesPerUnit ?? (def?.estimatedMinutesPerUnit || 0);
         newTasks.push({
           id: generateId(),
           date: selectedDate,
           taskName,
-          assigneeId: '',
-          plannedCount: 1,
-          minutesPerUnit: def?.estimatedMinutesPerUnit || 0,
-          plannedMinutes: def?.estimatedMinutesPerUnit || 0,
+          assigneeId: prevTask?.assigneeId || '',
+          plannedCount,
+          minutesPerUnit,
+          plannedMinutes: plannedCount * minutesPerUnit,
           plannedPoints: 0,
           actualCount: 0,
           actualPoints: 0,
@@ -144,10 +154,23 @@ export default function DailyPage() {
     return newTasks.filter(t => t.date === selectedDate);
   }, [selectedDate]);
 
+  // Sort tasks: 引き継ぎ first, then 【LINE】画像査定, then 【査定】計算書作成, then others
+  function sortTasks(taskList: DailyTask[]): DailyTask[] {
+    return [...taskList].sort((a, b) => {
+      const order = (t: DailyTask) => {
+        if (t.comment === '引き継ぎ') return 0;
+        if (t.taskName === '【LINE】画像査定') return 1;
+        if (t.taskName === '【査定】計算書作成') return 2;
+        return 3;
+      };
+      return order(a) - order(b);
+    });
+  }
+
   const loadTasks = useCallback(() => {
     setTaskDefsState(getTaskDefinitions());
     const tasksForDate = syncMonthlyTasks();
-    setTasksState(tasksForDate);
+    setTasksState(sortTasks(tasksForDate));
     setTimelineDataState(getTimelineForDate(selectedDate));
     setActualTimelineDataState(getActualTimelineForDate(selectedDate));
   }, [syncMonthlyTasks, selectedDate, dataVersion]);
@@ -337,7 +360,7 @@ export default function DailyPage() {
 
     if (added) {
       setDailyTasks(newTasks);
-      setTasksState(newTasks.filter(t => t.date === selectedDate));
+      setTasksState(sortTasks(newTasks.filter(t => t.date === selectedDate)));
     }
   }
 
