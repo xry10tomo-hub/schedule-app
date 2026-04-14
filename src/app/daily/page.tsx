@@ -90,12 +90,6 @@ export default function DailyPage() {
     const existingDaily = getDailyTasks();
     const dailyForDate = existingDaily.filter(t => t.date === selectedDate);
 
-    // Get previous day's tasks for copying values
-    const prevDate = new Date(selectedDate + 'T00:00:00');
-    prevDate.setDate(prevDate.getDate() - 1);
-    const prevDateStr = prevDate.toLocaleDateString('en-CA');
-    const prevDayTasks = existingDaily.filter(t => t.date === prevDateStr);
-
     let added = false;
     const newTasks = [...existingDaily];
 
@@ -123,18 +117,15 @@ export default function DailyPage() {
       const alreadyExists = dailyForDate.some(t => t.taskName === taskName && t.comment === source);
       if (!alreadyExists) {
         const def = DEFAULT_TASKS.find(d => d.name === taskName);
-        // Copy values from previous day if available
-        const prevTask = prevDayTasks.find(t => t.taskName === taskName);
-        const plannedCount = prevTask?.plannedCount ?? 1;
-        const minutesPerUnit = prevTask?.minutesPerUnit ?? (def?.estimatedMinutesPerUnit || 0);
+        const minutesPerUnit = def?.estimatedMinutesPerUnit || 0;
         newTasks.push({
           id: generateId(),
           date: selectedDate,
           taskName,
-          assigneeId: prevTask?.assigneeId || '',
-          plannedCount,
+          assigneeId: '',
+          plannedCount: 1,
           minutesPerUnit,
-          plannedMinutes: plannedCount * minutesPerUnit,
+          plannedMinutes: minutesPerUnit,
           plannedPoints: 0,
           actualCount: 0,
           actualPoints: 0,
@@ -333,32 +324,31 @@ export default function DailyPage() {
     prevDate.setDate(prevDate.getDate() - 1);
     const prevDateStr = prevDate.toLocaleDateString('en-CA'); // YYYY-MM-DD
 
-    const prevTasks = getDailyTasks().filter(t => t.date === prevDateStr);
+    // Get previous day's tasks (ignore 引き継ぎ)
+    const prevTasks = getDailyTasks().filter(t => t.date === prevDateStr && t.comment !== '引き継ぎ');
     if (prevTasks.length === 0) return;
 
     const existingDaily = getDailyTasks();
-    const dailyForDate = existingDaily.filter(t => t.date === selectedDate);
-    let added = false;
-    const newTasks = [...existingDaily];
+    let updated = false;
+    const newTasks = existingDaily.map(t => {
+      // Only update tasks for today's date, skip 引き継ぎ tasks
+      if (t.date !== selectedDate || t.comment === '引き継ぎ') return t;
+      // Find matching previous day task by taskName
+      const prevTask = prevTasks.find(pt => pt.taskName === t.taskName);
+      if (!prevTask) return t;
+      // Copy values from previous day
+      updated = true;
+      const plannedMinutes = prevTask.plannedCount * prevTask.minutesPerUnit;
+      return {
+        ...t,
+        plannedCount: prevTask.plannedCount,
+        minutesPerUnit: prevTask.minutesPerUnit,
+        plannedMinutes,
+        assigneeId: prevTask.assigneeId || t.assigneeId,
+      };
+    });
 
-    for (const prevTask of prevTasks) {
-      // Check if same task already exists for today
-      const alreadyExists = dailyForDate.some(t => t.taskName === prevTask.taskName && t.comment === prevTask.comment);
-      if (!alreadyExists) {
-        newTasks.push({
-          ...prevTask,
-          id: generateId(),
-          date: selectedDate,
-          actualCount: 0,
-          actualPoints: 0,
-          actualMinutes: 0,
-          status: 'pending',
-        });
-        added = true;
-      }
-    }
-
-    if (added) {
+    if (updated) {
       setDailyTasks(newTasks);
       setTasksState(sortTasks(newTasks.filter(t => t.date === selectedDate)));
     }
