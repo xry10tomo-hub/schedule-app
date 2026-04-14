@@ -197,6 +197,9 @@ export default function HomePage() {
   // ===== Browser notification for overdue tasks =====
   const notifiedBlocksRef = useRef<Set<string>>(new Set());
   const [overdueAlerts, setOverdueAlerts] = useState<{ blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
+  const [adminOverdueAlerts, setAdminOverdueAlerts] = useState<{ memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
+
+  const isAdmin = currentMember?.isAdmin === true;
 
   // Request notification permission on mount
   useEffect(() => {
@@ -210,10 +213,13 @@ export default function HomePage() {
     const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
     if (selectedDate !== todayStr) {
       setOverdueAlerts([]);
+      setAdminOverdueAlerts([]);
       return;
     }
 
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+    // === Own alerts (for all users) ===
     const planned = timelineData[currentUserId] || {};
     const actual = actualTimelineData[currentUserId] || {};
     const alerts: { blockIndex: number; taskName: string; scheduledTime: string }[] = [];
@@ -221,13 +227,12 @@ export default function HomePage() {
     for (const [blockStr, taskName] of Object.entries(planned)) {
       const blockIndex = Number(blockStr);
       const blockEndMinutes = TIMELINE_START * 60 + (blockIndex + 1) * 15;
-      // 15 minutes after the block's end time
       if (currentMinutes >= blockEndMinutes + 30 && !actual[blockStr]) {
         const scheduledTime = blockToTime(blockIndex);
         alerts.push({ blockIndex, taskName, scheduledTime });
 
         // Send browser notification (once per block)
-        const notifKey = `${selectedDate}-${blockStr}`;
+        const notifKey = `${selectedDate}-own-${blockStr}`;
         if (!notifiedBlocksRef.current.has(notifKey) && 'Notification' in window && Notification.permission === 'granted') {
           notifiedBlocksRef.current.add(notifKey);
           const memberName = currentMember?.name || '';
@@ -239,9 +244,40 @@ export default function HomePage() {
         }
       }
     }
-
     setOverdueAlerts(alerts);
-  }, [selectedDate, timelineData, actualTimelineData, currentUserId, currentMember]);
+
+    // === Admin alerts (all members) ===
+    if (isAdmin) {
+      const adminAlerts: { memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[] = [];
+
+      for (const member of members) {
+        if (member.id === currentUserId) continue; // skip self (already shown above)
+        const memberPlanned = timelineData[member.id] || {};
+        const memberActual = actualTimelineData[member.id] || {};
+
+        for (const [blockStr, taskName] of Object.entries(memberPlanned)) {
+          const blockIndex = Number(blockStr);
+          const blockEndMinutes = TIMELINE_START * 60 + (blockIndex + 1) * 15;
+          if (currentMinutes >= blockEndMinutes + 30 && !memberActual[blockStr]) {
+            const scheduledTime = blockToTime(blockIndex);
+            adminAlerts.push({ memberId: member.id, memberName: member.name, blockIndex, taskName, scheduledTime });
+
+            // Browser notification for admin (once per member-block)
+            const notifKey = `${selectedDate}-admin-${member.id}-${blockStr}`;
+            if (!notifiedBlocksRef.current.has(notifKey) && 'Notification' in window && Notification.permission === 'granted') {
+              notifiedBlocksRef.current.add(notifKey);
+              new Notification('⚠️ メンバー業務遅延', {
+                body: `${member.name}さん：「${taskName}」が予定時刻（${scheduledTime}）を30分超過しています。`,
+                icon: '/favicon.ico',
+                tag: notifKey,
+              });
+            }
+          }
+        }
+      }
+      setAdminOverdueAlerts(adminAlerts);
+    }
+  }, [selectedDate, timelineData, actualTimelineData, currentUserId, currentMember, isAdmin, members]);
 
   // Check every 60 seconds
   useEffect(() => {
@@ -300,7 +336,38 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* Overdue Alerts Banner */}
+        {/* Admin: All Members Overdue Alerts */}
+        {isAdmin && adminOverdueAlerts.length > 0 && (
+          <div className="bg-orange-50 border border-orange-300 rounded-xl p-4 animate-fade-in">
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-orange-600 text-lg">🔔</span>
+              <h3 className="text-sm font-bold text-orange-700">メンバー業務遅延アラート（{adminOverdueAlerts.length}件）</h3>
+            </div>
+            <div className="space-y-1.5">
+              {(() => {
+                // Group by member
+                const byMember = new Map<string, typeof adminOverdueAlerts>();
+                for (const a of adminOverdueAlerts) {
+                  if (!byMember.has(a.memberId)) byMember.set(a.memberId, []);
+                  byMember.get(a.memberId)!.push(a);
+                }
+                return Array.from(byMember.entries()).map(([memberId, alerts]) => (
+                  <div key={memberId} className="bg-white rounded-lg p-3 border border-orange-200">
+                    <p className="text-sm font-bold text-orange-800 mb-1">{alerts[0].memberName}さん</p>
+                    {alerts.map(a => (
+                      <div key={`${memberId}-${a.blockIndex}`} className="flex items-center gap-2 text-sm text-orange-700 ml-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-orange-500 flex-shrink-0" />
+                        <span>「{a.taskName}」— 予定 {a.scheduledTime} から30分以上超過</span>
+                      </div>
+                    ))}
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* Own Overdue Alerts Banner */}
         {overdueAlerts.length > 0 && (
           <div className="bg-red-50 border border-red-300 rounded-xl p-4 animate-fade-in">
             <div className="flex items-center gap-2 mb-2">
