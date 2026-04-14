@@ -50,6 +50,7 @@ export interface ShippingRecord {
   carrier: string;
   dayType: string; // '当日' | '両日'
   itemCount: number;
+  parcels: number; // 口数（通常1、複数店舗の場合2以上）
   points: number;
   inspector: string;
   creator: string; // optional - empty means not yet completed

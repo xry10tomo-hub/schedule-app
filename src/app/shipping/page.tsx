@@ -32,6 +32,7 @@ export default function ShippingPage() {
       carrier: '',
       dayType: '当日',
       itemCount: 1,
+      parcels: 1,
       points: 0,
       inspector: '',
       creator: '',
@@ -59,29 +60,41 @@ export default function ShippingPage() {
   function handleExportCSV() {
     const data = records.map(r => ({
       日付: r.date, 配送業者: r.carrier, 区分: r.dayType || '当日',
-      点数: r.points, 検品者: r.inspector, 作成者: r.creator,
+      口数: getParcels(r), 点数: r.points, 検品者: r.inspector, 作成者: r.creator,
     }));
     exportToCSV(data, `shipping_${selectedDate}.csv`);
   }
 
-  // Dashboard calculations - 件数 = record count
+  // Helper: get parcels count (default 1 for old records without parcels field)
+  const getParcels = (r: ShippingRecord) => (r.parcels && r.parcels >= 1) ? r.parcels : 1;
+  const sumParcels = (rs: ShippingRecord[]) => rs.reduce((s, r) => s + getParcels(r), 0);
+
+  // Dashboard calculations - 件数 = record count, 口数 = parcels total
   const todayRecords = records.filter(r => (r.dayType || '当日') === '当日');
   const ryojitsuRecords = records.filter(r => (r.dayType || '') === '両日');
 
   // 当日
   const todayTotalCnt = todayRecords.length;
+  const todayTotalParcels = sumParcels(todayRecords);
   const todayTotalPts = todayRecords.reduce((s, r) => s + r.points, 0);
-  const todayDoneCnt = todayRecords.filter(r => r.creator).length;
-  const todayDonePts = todayRecords.filter(r => r.creator).reduce((s, r) => s + r.points, 0);
+  const todayDoneRecords = todayRecords.filter(r => r.creator);
+  const todayDoneCnt = todayDoneRecords.length;
+  const todayDoneParcels = sumParcels(todayDoneRecords);
+  const todayDonePts = todayDoneRecords.reduce((s, r) => s + r.points, 0);
   const todayRemainCnt = todayTotalCnt - todayDoneCnt;
+  const todayRemainParcels = todayTotalParcels - todayDoneParcels;
   const todayRemainPts = todayTotalPts - todayDonePts;
 
   // 両日
   const ryojitsuTotalCnt = ryojitsuRecords.length;
+  const ryojitsuTotalParcels = sumParcels(ryojitsuRecords);
   const ryojitsuTotalPts = ryojitsuRecords.reduce((s, r) => s + r.points, 0);
-  const ryojitsuDoneCnt = ryojitsuRecords.filter(r => r.creator).length;
-  const ryojitsuDonePts = ryojitsuRecords.filter(r => r.creator).reduce((s, r) => s + r.points, 0);
+  const ryojitsuDoneRecords = ryojitsuRecords.filter(r => r.creator);
+  const ryojitsuDoneCnt = ryojitsuDoneRecords.length;
+  const ryojitsuDoneParcels = sumParcels(ryojitsuDoneRecords);
+  const ryojitsuDonePts = ryojitsuDoneRecords.reduce((s, r) => s + r.points, 0);
   const ryojitsuRemainCnt = ryojitsuTotalCnt - ryojitsuDoneCnt;
+  const ryojitsuRemainParcels = ryojitsuTotalParcels - ryojitsuDoneParcels;
   const ryojitsuRemainPts = ryojitsuTotalPts - ryojitsuDonePts;
 
   // 配送業者別集計
@@ -90,6 +103,7 @@ export default function ShippingPage() {
     return {
       name: c,
       count: rs.length,
+      parcels: sumParcels(rs),
       points: rs.reduce((s, r) => s + r.points, 0),
     };
   }).filter(c => c.count > 0);
@@ -101,6 +115,7 @@ export default function ShippingPage() {
     return {
       name,
       count: rs.length,
+      parcels: sumParcels(rs),
       points: rs.reduce((s, r) => s + r.points, 0),
     };
   });
@@ -123,6 +138,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
               <span className="text-[10px] text-blue-600 font-bold">当日 予定件数</span>
               <p className="text-xl font-bold text-blue-700">{fmtNum(todayTotalCnt)}<span className="text-sm">件</span></p>
+              {todayTotalParcels !== todayTotalCnt && <p className="text-[10px] text-blue-500">（{fmtNum(todayTotalParcels)}口）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
               <span className="text-[10px] text-blue-600 font-bold">当日 予定点数</span>
@@ -131,6 +147,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
               <span className="text-[10px] text-green-600 font-bold">当日 実績件数</span>
               <p className="text-xl font-bold text-green-700">{fmtNum(todayDoneCnt)}<span className="text-sm">件</span></p>
+              {todayDoneParcels !== todayDoneCnt && <p className="text-[10px] text-green-500">（{fmtNum(todayDoneParcels)}口）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
               <span className="text-[10px] text-green-600 font-bold">当日 実績点数</span>
@@ -139,6 +156,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-red-200 shadow-sm">
               <span className="text-[10px] text-red-600 font-bold">当日 残り件数</span>
               <p className="text-xl font-bold text-red-700">{fmtNum(todayRemainCnt)}<span className="text-sm">件</span></p>
+              {todayRemainParcels !== todayRemainCnt && <p className="text-[10px] text-red-500">（{fmtNum(todayRemainParcels)}口）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-red-200 shadow-sm">
               <span className="text-[10px] text-red-600 font-bold">当日 残り点数</span>
@@ -150,6 +168,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
               <span className="text-[10px] text-purple-600 font-bold">両日 予定件数</span>
               <p className="text-xl font-bold text-purple-700">{fmtNum(ryojitsuTotalCnt)}<span className="text-sm">件</span></p>
+              {ryojitsuTotalParcels !== ryojitsuTotalCnt && <p className="text-[10px] text-purple-500">（{fmtNum(ryojitsuTotalParcels)}口）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
               <span className="text-[10px] text-purple-600 font-bold">両日 予定点数</span>
@@ -158,6 +177,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
               <span className="text-[10px] text-teal-600 font-bold">両日 実績件数</span>
               <p className="text-xl font-bold text-teal-700">{fmtNum(ryojitsuDoneCnt)}<span className="text-sm">件</span></p>
+              {ryojitsuDoneParcels !== ryojitsuDoneCnt && <p className="text-[10px] text-teal-500">（{fmtNum(ryojitsuDoneParcels)}口）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
               <span className="text-[10px] text-teal-600 font-bold">両日 実績点数</span>
@@ -166,6 +186,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
               <span className="text-[10px] text-orange-600 font-bold">両日 残り件数</span>
               <p className="text-xl font-bold text-orange-700">{fmtNum(ryojitsuRemainCnt)}<span className="text-sm">件</span></p>
+              {ryojitsuRemainParcels !== ryojitsuRemainCnt && <p className="text-[10px] text-orange-500">（{fmtNum(ryojitsuRemainParcels)}口）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
               <span className="text-[10px] text-orange-600 font-bold">両日 残り点数</span>
@@ -186,6 +207,7 @@ export default function ShippingPage() {
                   <p className="text-[10px] text-indigo-700 font-semibold truncate" title={c.name}>{c.name}</p>
                   <p className="text-sm font-bold text-indigo-800 mt-0.5">
                     {fmtNum(c.count)}<span className="text-[10px] font-normal">件</span>
+                    {c.parcels !== c.count && <span className="text-[10px] font-normal text-indigo-500">（{fmtNum(c.parcels)}口）</span>}
                     <span className="mx-1 text-gray-300">/</span>
                     {fmtNum(c.points)}<span className="text-[10px] font-normal">点</span>
                   </p>
@@ -204,6 +226,7 @@ export default function ShippingPage() {
                 <p className={`text-[10px] font-semibold truncate ${p.count > 0 ? 'text-emerald-700' : 'text-gray-400'}`}>{p.name}</p>
                 <p className={`text-sm font-bold mt-0.5 ${p.count > 0 ? 'text-emerald-800' : 'text-gray-400'}`}>
                   {fmtNum(p.count)}<span className="text-[10px] font-normal">件</span>
+                  {p.parcels !== p.count && <span className={`text-[10px] font-normal ${p.count > 0 ? 'text-emerald-500' : 'text-gray-400'}`}>（{fmtNum(p.parcels)}口）</span>}
                   <span className="mx-1 text-gray-300">/</span>
                   {fmtNum(p.points)}<span className="text-[10px] font-normal">点</span>
                 </p>
@@ -219,6 +242,7 @@ export default function ShippingPage() {
               <tr className="text-left text-gray-600">
                 <th className="px-4 py-3 font-semibold">配送業者</th>
                 <th className="px-4 py-3 font-semibold">区分</th>
+                <th className="px-4 py-3 font-semibold">口数</th>
                 <th className="px-4 py-3 font-semibold">点数</th>
                 <th className="px-4 py-3 font-semibold">検品者</th>
                 <th className="px-4 py-3 font-semibold">作成者</th>
@@ -228,7 +252,7 @@ export default function ShippingPage() {
             </thead>
             <tbody>
               {records.length === 0 ? (
-                <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">記録がありません。下の「+ 行を追加」から登録してください。</td></tr>
+                <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">記録がありません。下の「+ 行を追加」から登録してください。</td></tr>
               ) : (
                 records.map(r => (
                   <tr key={r.id} className="border-b border-gray-50 hover:bg-green-50/30">
@@ -250,6 +274,15 @@ export default function ShippingPage() {
                       >
                         {DAY_TYPES.map(d => <option key={d} value={d}>{d}</option>)}
                       </select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="number"
+                        value={getParcels(r)}
+                        min={1}
+                        onChange={e => updateRecord(r.id, { parcels: Math.max(1, Number(e.target.value)) })}
+                        className="w-16 border rounded px-2 py-1 text-xs text-right"
+                      />
                     </td>
                     <td className="px-3 py-2">
                       <input
@@ -296,6 +329,7 @@ export default function ShippingPage() {
                 <tr className="bg-gray-50 font-bold">
                   <td className="px-4 py-3 text-gray-700">合計</td>
                   <td className="px-4 py-3"></td>
+                  <td className="px-4 py-3 text-gray-700">{fmtNum(sumParcels(records))}口</td>
                   <td className="px-4 py-3 text-gray-700">{fmtNum(records.reduce((s, r) => s + r.points, 0))}点</td>
                   <td className="px-4 py-3"></td>
                   <td className="px-4 py-3"></td>
