@@ -78,6 +78,29 @@ export default function ShiftsPage() {
     setSelectingCell(null);
   }
 
+  function copyShiftToNextDay(memberId: string, day: number) {
+    const shift = getShiftForMemberDay(memberId, day);
+    if (!shift) return;
+    // Calculate next day (may cross month boundary)
+    const currentDate = new Date(year, month, day);
+    const nextDate = new Date(currentDate);
+    nextDate.setDate(nextDate.getDate() + 1);
+    const nextDateStr = `${nextDate.getFullYear()}-${String(nextDate.getMonth() + 1).padStart(2, '0')}-${String(nextDate.getDate()).padStart(2, '0')}`;
+    // Remove existing shift for next day, then add copy
+    const all = getShifts().filter(s => !(s.memberId === memberId && s.date === nextDateStr));
+    const newShift: ShiftEntry = {
+      id: generateId(),
+      memberId,
+      date: nextDateStr,
+      startTime: shift.startTime,
+      endTime: shift.endTime,
+      note: shift.note,
+    };
+    setShifts([...all, newShift]);
+    loadShifts();
+    setSelectingCell(null);
+  }
+
   function prevMonth() {
     if (month === 0) { setYear(y => y - 1); setMonth(11); }
     else setMonth(m => m - 1);
@@ -162,10 +185,16 @@ export default function ShiftsPage() {
                     </button>
                   ))}
                   {shift && (
-                    <button
-                      onClick={() => removeShift(m.id, d)}
-                      className="w-full text-left px-2 py-1.5 rounded text-xs bg-red-50 text-red-600 hover:bg-red-100"
-                    >削除</button>
+                    <>
+                      <button
+                        onClick={() => copyShiftToNextDay(m.id, d)}
+                        className="w-full text-left px-2 py-1.5 rounded text-xs bg-blue-50 text-blue-600 hover:bg-blue-100"
+                      >📋 翌日にコピー</button>
+                      <button
+                        onClick={() => removeShift(m.id, d)}
+                        className="w-full text-left px-2 py-1.5 rounded text-xs bg-red-50 text-red-600 hover:bg-red-100"
+                      >削除</button>
+                    </>
                   )}
                   <button
                     onClick={() => setSelectingCell(null)}

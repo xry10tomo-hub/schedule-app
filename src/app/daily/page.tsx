@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
 
 // Timeline constants
@@ -86,25 +86,35 @@ export default function DailyPage() {
 
   const syncMonthlyTasks = useCallback(() => {
     const monthlySchedules = getMonthlySchedules().filter(s => s.date === selectedDate);
+    const approvedHandovers = getHandovers().filter(h => h.status === 'approved' && h.targetDate === selectedDate);
     const existingDaily = getDailyTasks();
     const dailyForDate = existingDaily.filter(t => t.date === selectedDate);
 
     let added = false;
     const newTasks = [...existingDaily];
 
-    const taskNamesToAdd: string[] = [];
+    // Monthly schedule tasks (固定業務 expansion)
+    const taskNamesToAdd: { name: string; source: string }[] = [];
     for (const ms of monthlySchedules) {
       if (ms.taskName === '固定業務') {
-        taskNamesToAdd.push(...FIXED_TASK_NAMES);
+        FIXED_TASK_NAMES.forEach(n => taskNamesToAdd.push({ name: n, source: '月次予定から自動反映' }));
       } else {
-        taskNamesToAdd.push(ms.taskName);
+        taskNamesToAdd.push({ name: ms.taskName, source: '月次予定から自動反映' });
       }
     }
 
-    const uniqueNames = [...new Set(taskNamesToAdd)];
+    // Approved handover tasks
+    for (const h of approvedHandovers) {
+      taskNamesToAdd.push({ name: h.taskName, source: '引き継ぎ' });
+    }
 
-    for (const taskName of uniqueNames) {
-      const alreadyExists = dailyForDate.some(t => t.taskName === taskName);
+    // Add tasks (allow duplicates between fixed and handover, but not within same source)
+    const addedKeys = new Set<string>();
+    for (const { name: taskName, source } of taskNamesToAdd) {
+      const key = `${taskName}|${source}`;
+      if (addedKeys.has(key)) continue;
+      addedKeys.add(key);
+      const alreadyExists = dailyForDate.some(t => t.taskName === taskName && t.comment === source);
       if (!alreadyExists) {
         const def = DEFAULT_TASKS.find(d => d.name === taskName);
         newTasks.push({
@@ -122,7 +132,7 @@ export default function DailyPage() {
           startTime: '09:00',
           endTime: '18:00',
           status: 'pending',
-          comment: '月次予定から自動反映',
+          comment: source,
         });
         added = true;
       }
@@ -294,6 +304,43 @@ export default function DailyPage() {
     setTasksState(all.filter(t => t.date === selectedDate));
   }
 
+  function copyFromPreviousDay() {
+    // Get previous day's date
+    const prevDate = new Date(selectedDate + 'T00:00:00');
+    prevDate.setDate(prevDate.getDate() - 1);
+    const prevDateStr = prevDate.toLocaleDateString('en-CA'); // YYYY-MM-DD
+
+    const prevTasks = getDailyTasks().filter(t => t.date === prevDateStr);
+    if (prevTasks.length === 0) return;
+
+    const existingDaily = getDailyTasks();
+    const dailyForDate = existingDaily.filter(t => t.date === selectedDate);
+    let added = false;
+    const newTasks = [...existingDaily];
+
+    for (const prevTask of prevTasks) {
+      // Check if same task already exists for today
+      const alreadyExists = dailyForDate.some(t => t.taskName === prevTask.taskName && t.comment === prevTask.comment);
+      if (!alreadyExists) {
+        newTasks.push({
+          ...prevTask,
+          id: generateId(),
+          date: selectedDate,
+          actualCount: 0,
+          actualPoints: 0,
+          actualMinutes: 0,
+          status: 'pending',
+        });
+        added = true;
+      }
+    }
+
+    if (added) {
+      setDailyTasks(newTasks);
+      setTasksState(newTasks.filter(t => t.date === selectedDate));
+    }
+  }
+
   function handleExportCSV() {
     const data = tasks.map(t => ({
       日付: t.date,
@@ -367,6 +414,7 @@ export default function DailyPage() {
           <h1 className="text-2xl font-bold text-gray-800">日次業務入力</h1>
           <div className="flex items-center gap-3">
             <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white" />
+            <button onClick={copyFromPreviousDay} className="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">📋 前日コピー</button>
             <button onClick={() => setShowForm(true)} className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">+ タスク追加</button>
             <button onClick={handleExportCSV} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">CSV出力</button>
           </div>
@@ -436,6 +484,11 @@ export default function DailyPage() {
         {tasks.some(t => t.comment === '月次予定から自動反映') && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-2 text-sm text-blue-700">
             月次カレンダーの予定が自動反映されています
+          </div>
+        )}
+        {tasks.some(t => t.comment === '引き継ぎ') && (
+          <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-700">
+            🔄 引き継ぎで承認された業務が反映されています（{tasks.filter(t => t.comment === '引き継ぎ').length}件）
           </div>
         )}
 
@@ -547,12 +600,14 @@ export default function DailyPage() {
                   ) : (
                     tasks.map(t => {
                       const isFromMonthly = t.comment === '月次予定から自動反映';
+                      const isFromHandover = t.comment === '引き継ぎ';
                       return (
-                        <tr key={t.id} className={`border-b border-gray-50 hover:bg-green-50/30 ${isFromMonthly ? 'bg-blue-50/30' : ''}`}>
+                        <tr key={t.id} className={`border-b border-gray-50 hover:bg-green-50/30 ${isFromHandover ? 'bg-amber-50/40' : isFromMonthly ? 'bg-blue-50/30' : ''}`}>
                           <td className="px-4 py-3 font-medium text-gray-800">
                             <div className="flex items-center gap-2">
                               <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
                               <span className="text-xs">{t.taskName}</span>
+                              {isFromHandover && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold">🔄 引き継ぎ</span>}
                               {isFromMonthly && <span className="text-[10px] text-blue-500">(月次)</span>}
                             </div>
                           </td>

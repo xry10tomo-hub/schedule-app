@@ -138,7 +138,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
               <span className="text-[10px] text-blue-600 font-bold">当日 予定件数</span>
               <p className="text-xl font-bold text-blue-700">{fmtNum(todayTotalCnt)}<span className="text-sm">件</span></p>
-              {todayTotalParcels !== todayTotalCnt && <p className="text-[10px] text-blue-500">（{fmtNum(todayTotalParcels)}口）</p>}
+              {todayTotalParcels !== todayTotalCnt && <p className="text-[10px] text-blue-500">（{fmtNum(todayTotalParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
               <span className="text-[10px] text-blue-600 font-bold">当日 予定点数</span>
@@ -147,7 +147,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
               <span className="text-[10px] text-green-600 font-bold">当日 実績件数</span>
               <p className="text-xl font-bold text-green-700">{fmtNum(todayDoneCnt)}<span className="text-sm">件</span></p>
-              {todayDoneParcels !== todayDoneCnt && <p className="text-[10px] text-green-500">（{fmtNum(todayDoneParcels)}口）</p>}
+              {todayDoneParcels !== todayDoneCnt && <p className="text-[10px] text-green-500">（{fmtNum(todayDoneParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
               <span className="text-[10px] text-green-600 font-bold">当日 実績点数</span>
@@ -156,7 +156,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-red-200 shadow-sm">
               <span className="text-[10px] text-red-600 font-bold">当日 残り件数</span>
               <p className="text-xl font-bold text-red-700">{fmtNum(todayRemainCnt)}<span className="text-sm">件</span></p>
-              {todayRemainParcels !== todayRemainCnt && <p className="text-[10px] text-red-500">（{fmtNum(todayRemainParcels)}口）</p>}
+              {todayRemainParcels !== todayRemainCnt && <p className="text-[10px] text-red-500">（{fmtNum(todayRemainParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-red-200 shadow-sm">
               <span className="text-[10px] text-red-600 font-bold">当日 残り点数</span>
@@ -168,7 +168,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
               <span className="text-[10px] text-purple-600 font-bold">両日 予定件数</span>
               <p className="text-xl font-bold text-purple-700">{fmtNum(ryojitsuTotalCnt)}<span className="text-sm">件</span></p>
-              {ryojitsuTotalParcels !== ryojitsuTotalCnt && <p className="text-[10px] text-purple-500">（{fmtNum(ryojitsuTotalParcels)}口）</p>}
+              {ryojitsuTotalParcels !== ryojitsuTotalCnt && <p className="text-[10px] text-purple-500">（{fmtNum(ryojitsuTotalParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
               <span className="text-[10px] text-purple-600 font-bold">両日 予定点数</span>
@@ -177,7 +177,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
               <span className="text-[10px] text-teal-600 font-bold">両日 実績件数</span>
               <p className="text-xl font-bold text-teal-700">{fmtNum(ryojitsuDoneCnt)}<span className="text-sm">件</span></p>
-              {ryojitsuDoneParcels !== ryojitsuDoneCnt && <p className="text-[10px] text-teal-500">（{fmtNum(ryojitsuDoneParcels)}口）</p>}
+              {ryojitsuDoneParcels !== ryojitsuDoneCnt && <p className="text-[10px] text-teal-500">（{fmtNum(ryojitsuDoneParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
               <span className="text-[10px] text-teal-600 font-bold">両日 実績点数</span>
@@ -186,7 +186,7 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
               <span className="text-[10px] text-orange-600 font-bold">両日 残り件数</span>
               <p className="text-xl font-bold text-orange-700">{fmtNum(ryojitsuRemainCnt)}<span className="text-sm">件</span></p>
-              {ryojitsuRemainParcels !== ryojitsuRemainCnt && <p className="text-[10px] text-orange-500">（{fmtNum(ryojitsuRemainParcels)}口）</p>}
+              {ryojitsuRemainParcels !== ryojitsuRemainCnt && <p className="text-[10px] text-orange-500">（{fmtNum(ryojitsuRemainParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
               <span className="text-[10px] text-orange-600 font-bold">両日 残り点数</span>
@@ -207,7 +207,7 @@ export default function ShippingPage() {
                   <p className="text-[10px] text-indigo-700 font-semibold truncate" title={c.name}>{c.name}</p>
                   <p className="text-sm font-bold text-indigo-800 mt-0.5">
                     {fmtNum(c.count)}<span className="text-[10px] font-normal">件</span>
-                    {c.parcels !== c.count && <span className="text-[10px] font-normal text-indigo-500">（{fmtNum(c.parcels)}口）</span>}
+                    {c.parcels !== c.count && <span className="text-[10px] font-normal text-indigo-500">（{fmtNum(c.parcels)}件）</span>}
                     <span className="mx-1 text-gray-300">/</span>
                     {fmtNum(c.points)}<span className="text-[10px] font-normal">点</span>
                   </p>
@@ -226,7 +226,7 @@ export default function ShippingPage() {
                 <p className={`text-[10px] font-semibold truncate ${p.count > 0 ? 'text-emerald-700' : 'text-gray-400'}`}>{p.name}</p>
                 <p className={`text-sm font-bold mt-0.5 ${p.count > 0 ? 'text-emerald-800' : 'text-gray-400'}`}>
                   {fmtNum(p.count)}<span className="text-[10px] font-normal">件</span>
-                  {p.parcels !== p.count && <span className={`text-[10px] font-normal ${p.count > 0 ? 'text-emerald-500' : 'text-gray-400'}`}>（{fmtNum(p.parcels)}口）</span>}
+                  {p.parcels !== p.count && <span className={`text-[10px] font-normal ${p.count > 0 ? 'text-emerald-500' : 'text-gray-400'}`}>（{fmtNum(p.parcels)}件）</span>}
                   <span className="mx-1 text-gray-300">/</span>
                   {fmtNum(p.points)}<span className="text-[10px] font-normal">点</span>
                 </p>
