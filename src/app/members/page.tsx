@@ -84,8 +84,29 @@ export default function MembersPage() {
     }
   }
 
-  function toggleCategory(cat: string) {
+  function toggleCategory(cat: string, e?: React.MouseEvent) {
+    // Capture the clicked element's position so we can pin it after the layout shifts.
+    const target = e?.currentTarget as HTMLElement | undefined;
+    const beforeTop = target?.getBoundingClientRect().top;
     setOpenCategories(prev => ({ ...prev, [cat]: !prev[cat] }));
+    if (target && beforeTop !== undefined) {
+      requestAnimationFrame(() => {
+        const afterTop = target.getBoundingClientRect().top;
+        const delta = afterTop - beforeTop;
+        if (Math.abs(delta) < 0.5) return;
+        // Walk up to find the nearest scrollable ancestor and adjust its scroll position.
+        let el: HTMLElement | null = target.parentElement;
+        while (el) {
+          const styles = getComputedStyle(el);
+          if (/(auto|scroll)/.test(styles.overflowY) && el.scrollHeight > el.clientHeight) {
+            el.scrollTop += delta;
+            return;
+          }
+          el = el.parentElement;
+        }
+        window.scrollBy(0, delta);
+      });
+    }
   }
 
   function selectAllInCategory(cat: string) {
@@ -159,7 +180,7 @@ export default function MembersPage() {
             対応可能業務{isEditing ? '' : '（時間 / 優先順位 / 実施時間）'}
           </p>
           {isEditing ? (
-            <div className="space-y-2 max-h-[500px] overflow-y-auto">
+            <div className="space-y-2 max-h-[500px] overflow-y-auto" style={{ overflowAnchor: 'none' }}>
               {/* Edit header */}
               <div className="flex items-center gap-2 px-3 py-1 bg-gray-100 rounded text-[10px] font-bold text-gray-500">
                 <span className="flex-1">業務名</span>
@@ -174,7 +195,7 @@ export default function MembersPage() {
                 const selectedCount = catTasks.filter(t => editSkills.includes(t.name)).length;
                 return (
                   <div key={cat} className="border border-gray-200 rounded-lg">
-                    <div className="flex items-center justify-between px-3 py-2 bg-gray-50 cursor-pointer" onClick={() => toggleCategory(cat)}>
+                    <div className="flex items-center justify-between px-3 py-2 bg-gray-50 cursor-pointer" onClick={e => toggleCategory(cat, e)}>
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-gray-700">{cat}</span>
                         <span className="text-xs text-gray-400">({selectedCount}/{catTasks.length})</span>

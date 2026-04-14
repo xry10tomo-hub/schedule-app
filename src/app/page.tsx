@@ -7,12 +7,8 @@ import { getCurrentUser } from '@/lib/store';
 export default function RootPage() {
   const router = useRouter();
   useEffect(() => {
-    const user = getCurrentUser();
-    if (user) {
-      router.replace('/home');
-    } else {
-      router.replace('/login');
-    }
+    // Always start from login screen
+    router.replace('/login');
   }, [router]);
 
   return (

@@ -11,16 +11,17 @@ import type {
   ShiftEntry,
   TaskDefinition,
   TaskResource,
+  HandoverRequest,
 } from './types';
 
 // ============ Default Data ============
 
 export const DEFAULT_MEMBERS: Member[] = [
   { id: 'wada', name: '和田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
-  { id: 'ushioda', name: '潮田', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'ushioda', name: '潮田', role: 'employee', isAdmin: true, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
   { id: 'kunigane', name: '国兼', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
   { id: 'kumagai', name: '熊谷', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
-  { id: 'suzuki', name: '鈴木', role: 'employee', isAdmin: true, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
+  { id: 'suzuki', name: '鈴木', role: 'employee', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
   { id: 'mihara', name: '三原', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
   { id: 'nakatani', name: '中谷', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
   { id: 'sato', name: '佐藤', role: 'parttime', isAdmin: false, skills: [], speedRatings: {}, priorityRatings: {}, scheduledTimeRatings: {}, email: '' },
@@ -154,6 +155,10 @@ export const FIXED_TASK_NAMES = [
   '【補助】相場更新',
   '【OL】進捗確認',
   '【OL】スケジュール作成',
+  '【販売】明細確認・交渉',
+  '【営業】商材追い電話',
+  '【販売】AVE請求',
+  '【営業】受け電話',
   '【他】休憩',
 ];
 
@@ -199,6 +204,7 @@ export const STORAGE_KEYS = {
   taskResources: 'schedule_task_resources',
   timeline: 'schedule_timeline',
   actualTimeline: 'schedule_actual_timeline',
+  handovers: 'schedule_handovers',
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -212,6 +218,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.taskResources,
   STORAGE_KEYS.timeline,
   STORAGE_KEYS.actualTimeline,
+  STORAGE_KEYS.handovers,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {
@@ -224,22 +231,43 @@ function getFromStorage<T>(key: string, defaultValue: T): T {
   }
 }
 
-function setToStorage<T>(key: string, value: T): void {
-  if (typeof window === 'undefined') return;
-  localStorage.setItem(key, JSON.stringify(value));
-  // Sync to Firestore for shared data
-  if (SYNC_KEYS.has(key)) {
+// Debounce Firestore writes per key to prevent write-stream exhaustion
+const firestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function debouncedFirestoreSync(key: string, value: unknown) {
+  const existing = firestoreTimers.get(key);
+  if (existing) clearTimeout(existing);
+  firestoreTimers.set(key, setTimeout(() => {
+    firestoreTimers.delete(key);
     setDoc(doc(db, 'appData', key), {
       value: JSON.parse(JSON.stringify(value)),
       updatedAt: Date.now(),
     }).catch((err) => console.error('Firestore sync error:', err));
+  }, 500));
+}
+
+function setToStorage<T>(key: string, value: T): void {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem(key, JSON.stringify(value));
+  // Sync to Firestore for shared data (debounced)
+  if (SYNC_KEYS.has(key)) {
+    debouncedFirestoreSync(key, value);
   }
 }
 
 // ============ Data Access Functions ============
 
+// Migration: admin moved from 鈴木 to 潮田
+export function migrateMembers(raw: Member[]): Member[] {
+  return raw.map(m => {
+    if (m.id === 'suzuki' && m.isAdmin) return { ...m, isAdmin: false };
+    if (m.id === 'ushioda' && !m.isAdmin) return { ...m, isAdmin: true };
+    return m;
+  });
+}
+
 export function getMembers(): Member[] {
-  return getFromStorage(STORAGE_KEYS.members, DEFAULT_MEMBERS);
+  const raw = getFromStorage(STORAGE_KEYS.members, DEFAULT_MEMBERS);
+  return migrateMembers(raw);
 }
 export function setMembers(members: Member[]) {
   setToStorage(STORAGE_KEYS.members, members);
@@ -319,6 +347,14 @@ export function setActualTimelineForDate(date: string, blocks: Record<string, Re
   setActualTimelineBlocks(all);
 }
 
+// ============ Handover Requests ============
+export function getHandovers(): HandoverRequest[] {
+  return getFromStorage(STORAGE_KEYS.handovers, []);
+}
+export function setHandovers(items: HandoverRequest[]) {
+  setToStorage(STORAGE_KEYS.handovers, items);
+}
+
 export function getCurrentUser(): string {
   return getFromStorage(STORAGE_KEYS.currentUser, '');
 }
@@ -330,6 +366,15 @@ export function setCurrentUser(userId: string) {
 
 export function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+// Format a number with thousand-separator commas (e.g. 1000 -> "1,000").
+// Accepts numbers and numeric strings; falls back to original on NaN.
+export function fmtNum(value: number | string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '0';
+  const n = typeof value === 'number' ? value : Number(value);
+  if (Number.isNaN(n)) return String(value);
+  return n.toLocaleString('ja-JP');
 }
 
 export function formatDate(date: Date): string {

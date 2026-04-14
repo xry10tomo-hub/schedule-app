@@ -1,23 +1,36 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { getMembers, setCurrentUser } from '@/lib/store';
-import { useAppContext } from '@/lib/store';
+import type { Member } from '@/lib/types';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { setCurrentUserId } = useAppContext();
-  const members = getMembers();
+  const [members, setMembersState] = useState<Member[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    setMembersState(getMembers());
+    setReady(true);
+  }, []);
 
   const employees = members.filter(m => m.role === 'employee');
   const parttimers = members.filter(m => m.role === 'parttime');
 
   function handleLogin() {
     if (!selectedId) return;
-    setCurrentUserId(selectedId);
+    setCurrentUser(selectedId);
     router.push('/home');
+  }
+
+  if (!ready) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-800 via-green-700 to-green-600">
+        <div className="text-white font-medium">読み込み中...</div>
+      </div>
+    );
   }
 
   return (

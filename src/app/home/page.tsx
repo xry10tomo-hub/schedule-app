@@ -1,8 +1,8 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getTaskDefinitions, calculateDailySummary, TASK_CATEGORIES } from '@/lib/store';
+import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getTaskDefinitions, calculateDailySummary, TASK_CATEGORIES, fmtNum } from '@/lib/store';
 import type { DailyTask, ShippingRecord, ShiftEntry, TaskDefinition } from '@/lib/types';
 
 function ProgressRing({ percent, size = 120, stroke = 10, color = '#16a34a' }: { percent: number; size?: number; stroke?: number; color?: string }) {
@@ -95,9 +95,6 @@ export default function HomePage() {
   }, [selectedDate, dataVersion, currentUserId]);
 
   const summary = calculateDailySummary(selectedDate);
-  const myTasks = tasks.filter(t => t.assigneeId === currentUserId);
-  const myCompleted = myTasks.filter(t => t.status === 'completed').length;
-  const myProgress = myTasks.length > 0 ? (myCompleted / myTasks.length) * 100 : 0;
 
   const totalShippingRecords = shippingRecords.length;
   const totalShippingPoints = shippingRecords.reduce((s, r) => s + r.points, 0);
@@ -123,8 +120,30 @@ export default function HomePage() {
   Object.values(myActualBlocks).forEach(tn => { myActualTimelineTasks[tn] = (myActualTimelineTasks[tn] || 0) + 15; });
   const myActualTimelineTotal = Object.keys(myActualBlocks).length * 15;
 
-  // My actual totals (from actual timeline, not daily tasks)
-  const myActualMinutes = myActualTimelineTotal;
+  // ===== Timeline-based progress (plan vs actual) =====
+  // Count distinct task names that appear in my plan timeline,
+  // and how many of them also appear in my actual timeline.
+  const myPlannedTaskSet = new Set(Object.values(myBlocks));
+  const myActualTaskSet = new Set(Object.values(myActualBlocks));
+  const myPlannedTaskCount = myPlannedTaskSet.size;
+  const myDoneTaskCount = Array.from(myPlannedTaskSet).filter(tn => myActualTaskSet.has(tn)).length;
+  const myProgress = myPlannedTaskCount > 0 ? (myDoneTaskCount / myPlannedTaskCount) * 100 : 0;
+
+  // Team-wide timeline progress
+  const teamPlannedSet = new Set<string>();
+  const teamDonePairs = new Set<string>(); // memberId|taskName done in actual
+  Object.entries(timelineData).forEach(([memberId, blocks]) => {
+    Object.values(blocks).forEach(tn => teamPlannedSet.add(`${memberId}|${tn}`));
+  });
+  Object.entries(actualTimelineData).forEach(([memberId, blocks]) => {
+    Object.values(blocks).forEach(tn => {
+      const key = `${memberId}|${tn}`;
+      if (teamPlannedSet.has(key)) teamDonePairs.add(key);
+    });
+  });
+  const teamPlannedCount = teamPlannedSet.size;
+  const teamDoneCount = teamDonePairs.size;
+  const teamProgress = teamPlannedCount > 0 ? (teamDoneCount / teamPlannedCount) * 100 : 0;
 
   // ===== Actual timeline paint handlers =====
   function handleActualBlockMouseDown(blockIndex: number) {
@@ -175,6 +194,62 @@ export default function HomePage() {
     return () => window.removeEventListener('mouseup', handleMouseUp);
   }, []);
 
+  // ===== Browser notification for overdue tasks =====
+  const notifiedBlocksRef = useRef<Set<string>>(new Set());
+  const [overdueAlerts, setOverdueAlerts] = useState<{ blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
+
+  // Request notification permission on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  const checkOverdue = useCallback(() => {
+    const now = new Date();
+    const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+    if (selectedDate !== todayStr) {
+      setOverdueAlerts([]);
+      return;
+    }
+
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const planned = timelineData[currentUserId] || {};
+    const actual = actualTimelineData[currentUserId] || {};
+    const alerts: { blockIndex: number; taskName: string; scheduledTime: string }[] = [];
+
+    for (const [blockStr, taskName] of Object.entries(planned)) {
+      const blockIndex = Number(blockStr);
+      const blockEndMinutes = TIMELINE_START * 60 + (blockIndex + 1) * 15;
+      // 15 minutes after the block's end time
+      if (currentMinutes >= blockEndMinutes + 30 && !actual[blockStr]) {
+        const scheduledTime = blockToTime(blockIndex);
+        alerts.push({ blockIndex, taskName, scheduledTime });
+
+        // Send browser notification (once per block)
+        const notifKey = `${selectedDate}-${blockStr}`;
+        if (!notifiedBlocksRef.current.has(notifKey) && 'Notification' in window && Notification.permission === 'granted') {
+          notifiedBlocksRef.current.add(notifKey);
+          const memberName = currentMember?.name || '';
+          new Notification('⚠️ 業務遅延アラート', {
+            body: `${memberName}さん：「${taskName}」が予定時刻（${scheduledTime}）を30分超過しています。実績を入力してください。`,
+            icon: '/favicon.ico',
+            tag: notifKey,
+          });
+        }
+      }
+    }
+
+    setOverdueAlerts(alerts);
+  }, [selectedDate, timelineData, actualTimelineData, currentUserId, currentMember]);
+
+  // Check every 60 seconds
+  useEffect(() => {
+    checkOverdue();
+    const interval = setInterval(checkOverdue, 60_000);
+    return () => clearInterval(interval);
+  }, [checkOverdue]);
+
   // Active members (with shifts)
   const activeMembers = useMemo(() => {
     return members.filter(m => shiftsForDate.some(s => s.memberId === m.id));
@@ -197,13 +272,6 @@ export default function HomePage() {
     const idx = allTaskNames.indexOf(taskName);
     return idx >= 0 ? TASK_COLORS[idx % TASK_COLORS.length] : '#9ca3af';
   }
-
-  // Per-member task summary for the chart
-  const memberTaskCounts = members.map(m => {
-    const memberTasks = tasks.filter(t => t.assigneeId === m.id);
-    const completed = memberTasks.filter(t => t.status === 'completed').length;
-    return { name: m.name, total: memberTasks.length, completed };
-  }).filter(m => m.total > 0);
 
   // Date display
   const dateObj = new Date(selectedDate + 'T00:00:00');
@@ -232,12 +300,30 @@ export default function HomePage() {
           </div>
         </div>
 
+        {/* Overdue Alerts Banner */}
+        {overdueAlerts.length > 0 && (
+          <div className="bg-red-50 border border-red-300 rounded-xl p-4 animate-fade-in">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-red-600 text-lg">⚠️</span>
+              <h3 className="text-sm font-bold text-red-700">業務遅延アラート（{overdueAlerts.length}件）</h3>
+            </div>
+            <div className="space-y-1">
+              {overdueAlerts.map(a => (
+                <div key={a.blockIndex} className="flex items-center gap-2 text-sm text-red-700">
+                  <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
+                  <span>「{a.taskName}」— 予定 {a.scheduledTime} から30分以上超過。実績を入力してください。</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Stats Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <StatCard title="到着件数" value={totalShippingRecords} sub="件" color="blue" />
-          <StatCard title="到着点数" value={totalShippingPoints} sub="点" color="purple" />
-          <StatCard title="チーム全体タスク" value={summary.taskCount} sub={`完了: ${summary.completedCount}`} color="green" />
-          <StatCard title="予実差分" value={`${summary.gapMinutes >= 0 ? '+' : ''}${summary.gapMinutes}分`} sub="実績 - 予定" color="orange" />
+          <StatCard title="到着件数" value={fmtNum(totalShippingRecords)} sub="件" color="blue" />
+          <StatCard title="到着点数" value={fmtNum(totalShippingPoints)} sub="点" color="purple" />
+          <StatCard title="チーム全体タスク" value={fmtNum(teamPlannedCount)} sub={`実施中: ${fmtNum(teamDoneCount)}`} color="green" />
+          <StatCard title="予実差分" value={`${summary.gapMinutes >= 0 ? '+' : ''}${fmtNum(summary.gapMinutes)}分`} sub="実績 - 予定" color="orange" />
         </div>
 
         {/* Progress Section */}
@@ -245,7 +331,7 @@ export default function HomePage() {
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col items-center">
             <h3 className="text-sm font-semibold text-gray-600 mb-4">自分の進捗</h3>
             <ProgressRing percent={myProgress} />
-            <p className="mt-3 text-sm text-gray-500">{myCompleted} / {myTasks.length} タスク完了</p>
+            <p className="mt-3 text-sm text-gray-500">{fmtNum(myDoneTaskCount)} / {fmtNum(myPlannedTaskCount)} 業務実施中</p>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
@@ -253,20 +339,20 @@ export default function HomePage() {
             <div className="space-y-3">
               <div className="flex justify-between items-center">
                 <span className="text-xs text-gray-500">シフト時間</span>
-                <span className="text-sm font-bold text-gray-700">{myShiftMinutes}分 ({(myShiftMinutes / 60).toFixed(1)}h)</span>
+                <span className="text-sm font-bold text-gray-700">{fmtNum(myShiftMinutes)}分 ({(myShiftMinutes / 60).toFixed(1)}h)</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-green-600">予定時間（タイムライン）</span>
-                <span className="text-sm font-bold text-green-700">{myTimelineTotal}分</span>
+                <span className="text-sm font-bold text-green-700">{fmtNum(myTimelineTotal)}分</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-xs text-blue-600">実績時間（タイムライン）</span>
-                <span className="text-sm font-bold text-blue-700">{myActualTimelineTotal}分</span>
+                <span className="text-sm font-bold text-blue-700">{fmtNum(myActualTimelineTotal)}分</span>
               </div>
               <div className="flex justify-between items-center border-t pt-2">
                 <span className="text-xs text-gray-500">残り</span>
                 <span className={`text-sm font-bold ${(myShiftMinutes - myTimelineTotal) >= 0 ? 'text-gray-600' : 'text-red-600'}`}>
-                  {myShiftMinutes - myTimelineTotal}分
+                  {fmtNum(myShiftMinutes - myTimelineTotal)}分
                 </span>
               </div>
             </div>
@@ -274,8 +360,8 @@ export default function HomePage() {
 
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 flex flex-col items-center">
             <h3 className="text-sm font-semibold text-gray-600 mb-4">チーム全体の進捗</h3>
-            <ProgressRing percent={summary.completionRate} color="#059669" />
-            <p className="mt-3 text-sm text-gray-500">{summary.completedCount} / {summary.taskCount} タスク完了</p>
+            <ProgressRing percent={teamProgress} color="#059669" />
+            <p className="mt-3 text-sm text-gray-500">{fmtNum(teamDoneCount)} / {fmtNum(teamPlannedCount)} 業務実施中</p>
           </div>
         </div>
 
@@ -542,87 +628,6 @@ export default function HomePage() {
           </div>
         )}
 
-        {/* My Today's Tasks (from daily task list) */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-600 mb-4">自分のタスク</h3>
-          {myTasks.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">タスクはまだ割り当てられていません</p>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-gray-500 border-b">
-                    <th className="pb-2 font-medium">業務名</th>
-                    <th className="pb-2 font-medium">予定時間</th>
-                    <th className="pb-2 font-medium">実績件数</th>
-                    <th className="pb-2 font-medium">実績時間</th>
-                    <th className="pb-2 font-medium">差分</th>
-                    <th className="pb-2 font-medium">ステータス</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {myTasks.map(t => {
-                    const gap = t.actualMinutes - t.plannedMinutes;
-                    return (
-                      <tr key={t.id} className="border-b border-gray-50 hover:bg-green-50/50">
-                        <td className="py-2 font-medium text-gray-800">
-                          <div className="flex items-center gap-2">
-                            <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
-                            {t.taskName}
-                          </div>
-                        </td>
-                        <td className="py-2 text-gray-600">{t.plannedMinutes}分</td>
-                        <td className="py-2 text-gray-600">{t.actualCount}件</td>
-                        <td className="py-2 text-gray-600">{t.actualMinutes}分</td>
-                        <td className={`py-2 font-semibold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                          {gap > 0 ? '+' : ''}{gap}分
-                        </td>
-                        <td className="py-2">
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            t.status === 'completed' ? 'bg-green-100 text-green-700' :
-                            t.status === 'in_progress' ? 'bg-yellow-100 text-yellow-700' :
-                            'bg-gray-100 text-gray-500'
-                          }`}>
-                            {t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '未着手'}
-                          </span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* Member bar chart */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <h3 className="text-sm font-semibold text-gray-600 mb-4">メンバー別タスク進捗</h3>
-          {memberTaskCounts.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">タスクはまだありません</p>
-          ) : (
-            <div className="space-y-3">
-              {memberTaskCounts.map(m => {
-                const pct = m.total > 0 ? (m.completed / m.total) * 100 : 0;
-                return (
-                  <div key={m.name} className="flex items-center gap-3">
-                    <span className="text-sm font-medium text-gray-700 w-16 text-right">{m.name}</span>
-                    <div className="flex-1 bg-gray-100 rounded-full h-6 relative overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-green-400 to-green-600 rounded-full animate-progress"
-                        style={{ width: `${pct}%` }}
-                      />
-                      <span className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-700">
-                        {m.completed}/{m.total}
-                      </span>
-                    </div>
-                    <span className="text-sm text-gray-500 w-12 text-right">{Math.round(pct)}%</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
       </div>
     </DashboardLayout>
   );

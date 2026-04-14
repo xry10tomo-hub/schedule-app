@@ -83,6 +83,22 @@ export interface DailySummary {
   gapMinutes: number;
 }
 
+export type HandoverStatus = 'pending' | 'approved' | 'rejected';
+
+export interface HandoverRequest {
+  id: string;
+  applicantId: string; // member id who submitted
+  targetDate: string; // YYYY-MM-DD - the day the task should be performed
+  taskName: string; // selected from TaskDefinition list
+  reason: string; // why the handover is needed
+  detail: string; // free-form description
+  status: HandoverStatus;
+  reviewerId: string; // admin who reviewed (empty until reviewed)
+  reviewComment: string;
+  createdAt: number;
+  reviewedAt: number; // 0 until reviewed
+}
+
 export interface MemberSummary {
   memberId: string;
   memberName: string;

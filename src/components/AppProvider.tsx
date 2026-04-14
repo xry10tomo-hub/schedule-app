@@ -1,12 +1,14 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS } from '@/lib/store';
+import { usePathname } from 'next/navigation';
+import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, migrateMembers, setMembers } from '@/lib/store';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
 
 export default function AppProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const [currentUserId, setCurrentUserIdState] = useState('');
   const [members, setMembersState] = useState<Member[]>(DEFAULT_MEMBERS);
   const [dataVersion, setDataVersion] = useState(0);
@@ -16,39 +18,53 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     setCurrentUserIdState(getCurrentUser());
-    setMembersState(getMembers());
+    const initialMembers = getMembers();
+    setMembersState(initialMembers);
+    // Persist migrated members back so the change syncs to all devices
+    setMembers(initialMembers);
 
     // Initialize Firestore: seed defaults if empty, then subscribe
+    // Use timeout to prevent blocking the UI if Firestore is slow
     async function initFirestore() {
       try {
-        // Seed default data if Firestore is empty
-        const defaults: [string, unknown][] = [
-          [STORAGE_KEYS.members, DEFAULT_MEMBERS],
-          [STORAGE_KEYS.tasks, DEFAULT_TASKS],
-          [STORAGE_KEYS.taskResources, DEFAULT_TASK_RESOURCES],
-        ];
-        for (const [key, defaultVal] of defaults) {
-          const snap = await getDoc(doc(db, 'appData', key));
-          if (!snap.exists()) {
-            await setDoc(doc(db, 'appData', key), { value: defaultVal, updatedAt: Date.now() });
-          }
-        }
-
-        // Also push any existing localStorage data that's not yet in Firestore
-        for (const key of SYNC_KEYS) {
-          const snap = await getDoc(doc(db, 'appData', key));
-          if (!snap.exists()) {
-            const localData = localStorage.getItem(key);
-            if (localData) {
-              await setDoc(doc(db, 'appData', key), {
-                value: JSON.parse(localData),
-                updatedAt: Date.now(),
-              });
+        const timeoutPromise = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 5000));
+        const firestorePromise = (async () => {
+          // Seed default data if Firestore is empty
+          const defaults: [string, unknown][] = [
+            [STORAGE_KEYS.members, DEFAULT_MEMBERS],
+            [STORAGE_KEYS.tasks, DEFAULT_TASKS],
+            [STORAGE_KEYS.taskResources, DEFAULT_TASK_RESOURCES],
+          ];
+          for (const [key, defaultVal] of defaults) {
+            const snap = await getDoc(doc(db, 'appData', key));
+            if (!snap.exists()) {
+              await setDoc(doc(db, 'appData', key), { value: defaultVal, updatedAt: Date.now() });
             }
           }
-        }
 
-        setFirestoreReady(true);
+          // Also push any existing localStorage data that's not yet in Firestore
+          for (const key of SYNC_KEYS) {
+            const snap = await getDoc(doc(db, 'appData', key));
+            if (!snap.exists()) {
+              const localData = localStorage.getItem(key);
+              if (localData) {
+                await setDoc(doc(db, 'appData', key), {
+                  value: JSON.parse(localData),
+                  updatedAt: Date.now(),
+                });
+              }
+            }
+          }
+          return 'done' as const;
+        })();
+
+        const result = await Promise.race([firestorePromise, timeoutPromise]);
+        if (result === 'timeout') {
+          console.warn('Firestore init timed out, continuing with localStorage');
+          setFirestoreReady(false);
+        } else {
+          setFirestoreReady(true);
+        }
       } catch (err) {
         console.error('Firestore init error:', err);
         // App still works with localStorage only
@@ -71,7 +87,12 @@ export default function AppProvider({ children }: { children: React.ReactNode })
           localStorage.setItem(key, JSON.stringify(data));
           // Update members state if it's the members key
           if (key === STORAGE_KEYS.members) {
-            setMembersState(data);
+            const migrated = migrateMembers(data as Member[]);
+            // If migration changed anything, persist back to Firestore so it sticks
+            if (JSON.stringify(migrated) !== JSON.stringify(data)) {
+              setMembers(migrated);
+            }
+            setMembersState(migrated);
           }
           // Bump version to trigger re-renders in pages
           setDataVersion(v => v + 1);
@@ -95,7 +116,9 @@ export default function AppProvider({ children }: { children: React.ReactNode })
     setMembersState(getMembers());
   }, []);
 
-  if (loading) {
+  // Login page and root page don't need Firestore - render immediately
+  const skipLoading = pathname === '/login' || pathname === '/';
+  if (loading && !skipLoading) {
     return (
       <div className="min-h-screen bg-green-50 flex items-center justify-center">
         <div className="text-center">
