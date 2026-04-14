@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
 
 // Timeline constants
@@ -764,6 +764,9 @@ export default function DailyPage() {
 
         {/* Review Tab - AI振り返り分析 */}
         {viewTab === 'review' && (() => {
+          // --- Load actual performance data ---
+          const perfData = getActualPerformanceForDate(selectedDate);
+
           // --- 画像査定 evaluation ---
           const imageAssessmentPlanMinutes = tasks
             .filter(t => t.taskName === '【LINE】画像査定')
@@ -772,6 +775,28 @@ export default function DailyPage() {
           const imageGap = imageAssessmentActualMinutes - imageAssessmentPlanMinutes;
           const imageRate = imageAssessmentPlanMinutes > 0 ? Math.round((imageAssessmentActualMinutes / imageAssessmentPlanMinutes) * 100) : 0;
 
+          // Aggregate performance across all members for 画像査定
+          let imageTotalCount = 0, imageTotalPoints = 0;
+          const imageMemberPerf: { name: string; count: number; points: number; minutes: number; avgSpeed: number | null }[] = [];
+          Object.entries(perfData).forEach(([memberId, tasks]) => {
+            const entry = tasks['【LINE】画像査定'];
+            if (entry) {
+              const memberMinutes = actualTimelineAggregation['【LINE】画像査定']?.members?.[memberId] || 0;
+              const member = members.find(m => m.id === memberId);
+              imageTotalCount += entry.count;
+              imageTotalPoints += entry.points;
+              imageMemberPerf.push({
+                name: member?.name || memberId,
+                count: entry.count,
+                points: entry.points,
+                minutes: memberMinutes,
+                avgSpeed: entry.count > 0 && memberMinutes > 0 ? Math.round((memberMinutes / entry.count) * 10) / 10 : null,
+              });
+            }
+          });
+          const imageAvgSpeed = imageTotalCount > 0 && imageAssessmentActualMinutes > 0
+            ? Math.round((imageAssessmentActualMinutes / imageTotalCount) * 10) / 10 : null;
+
           // --- 実査定 evaluation ---
           const realAssessmentPlanMinutes = tasks
             .filter(t => t.taskName === '【査定】計算書作成')
@@ -779,6 +804,28 @@ export default function DailyPage() {
           const realAssessmentActualMinutes = actualTimelineAggregation['【査定】計算書作成']?.totalMinutes || 0;
           const realGap = realAssessmentActualMinutes - realAssessmentPlanMinutes;
           const realRate = realAssessmentPlanMinutes > 0 ? Math.round((realAssessmentActualMinutes / realAssessmentPlanMinutes) * 100) : 0;
+
+          // Aggregate performance across all members for 計算書作成
+          let realTotalCount = 0, realTotalPoints = 0;
+          const realMemberPerf: { name: string; count: number; points: number; minutes: number; avgSpeed: number | null }[] = [];
+          Object.entries(perfData).forEach(([memberId, tasks]) => {
+            const entry = tasks['【査定】計算書作成'];
+            if (entry) {
+              const memberMinutes = actualTimelineAggregation['【査定】計算書作成']?.members?.[memberId] || 0;
+              const member = members.find(m => m.id === memberId);
+              realTotalCount += entry.count;
+              realTotalPoints += entry.points;
+              realMemberPerf.push({
+                name: member?.name || memberId,
+                count: entry.count,
+                points: entry.points,
+                minutes: memberMinutes,
+                avgSpeed: entry.count > 0 && memberMinutes > 0 ? Math.round((memberMinutes / entry.count) * 10) / 10 : null,
+              });
+            }
+          });
+          const realAvgSpeed = realTotalCount > 0 && realAssessmentActualMinutes > 0
+            ? Math.round((realAssessmentActualMinutes / realTotalCount) * 10) / 10 : null;
 
           // --- 抜け漏れ業務 (tasks in actuals but not in plan) ---
           const plannedTaskNames = new Set(tasks.map(t => t.taskName));
@@ -913,8 +960,24 @@ export default function DailyPage() {
                           <span className="text-gray-500">実績時間</span>
                           <span className="font-bold text-blue-700">{imageAssessmentActualMinutes}分</span>
                         </div>
+                        {imageTotalCount > 0 && (
+                          <>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">実績件数</span>
+                              <span className="font-bold text-blue-700">{imageTotalCount}件</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">実績点数</span>
+                              <span className="font-bold text-blue-700">{imageTotalPoints}点</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">平均スピード</span>
+                              <span className="font-bold text-green-700">{imageAvgSpeed !== null ? `${imageAvgSpeed}分/件` : '-'}</span>
+                            </div>
+                          </>
+                        )}
                         <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">達成率</span>
+                          <span className="text-gray-500">時間達成率</span>
                           <span className={`font-bold ${imageRate >= 90 && imageRate <= 110 ? 'text-green-600' : imageRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
                             {imageAssessmentPlanMinutes > 0 ? `${imageRate}%` : '-'}
                           </span>
@@ -926,18 +989,39 @@ export default function DailyPage() {
                           </span>
                         </div>
                         {/* Members working on image assessment */}
-                        {actualTimelineAggregation['【LINE】画像査定']?.members && (
+                        {(actualTimelineAggregation['【LINE】画像査定']?.members || imageMemberPerf.length > 0) && (
                           <div className="pt-2 border-t border-purple-100">
                             <p className="text-[10px] text-gray-500 mb-1">担当者別実績</p>
-                            {Object.entries(actualTimelineAggregation['【LINE】画像査定'].members).map(([mid, mins]) => {
-                              const member = members.find(m => m.id === mid);
-                              return (
-                                <div key={mid} className="flex justify-between text-[10px]">
-                                  <span className="text-gray-600">{member?.name || mid}</span>
-                                  <span className="font-bold">{mins}分</span>
-                                </div>
-                              );
-                            })}
+                            <table className="w-full text-[10px]">
+                              <thead>
+                                <tr className="text-left text-gray-400">
+                                  <th className="pb-0.5">名前</th>
+                                  <th className="pb-0.5 text-right">時間</th>
+                                  <th className="pb-0.5 text-right">件数</th>
+                                  <th className="pb-0.5 text-right">点数</th>
+                                  <th className="pb-0.5 text-right">平均</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {imageMemberPerf.length > 0 ? imageMemberPerf.map(mp => (
+                                  <tr key={mp.name}>
+                                    <td className="text-gray-600">{mp.name}</td>
+                                    <td className="text-right font-bold">{mp.minutes}分</td>
+                                    <td className="text-right font-bold">{mp.count}件</td>
+                                    <td className="text-right font-bold">{mp.points}点</td>
+                                    <td className="text-right font-bold text-green-700">{mp.avgSpeed !== null ? `${mp.avgSpeed}分/件` : '-'}</td>
+                                  </tr>
+                                )) : Object.entries(actualTimelineAggregation['【LINE】画像査定']?.members || {}).map(([mid, mins]) => {
+                                  const member = members.find(m => m.id === mid);
+                                  return (
+                                    <tr key={mid}>
+                                      <td className="text-gray-600">{member?.name || mid}</td>
+                                      <td className="text-right font-bold" colSpan={4}>{mins}分</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                       </div>
@@ -965,8 +1049,24 @@ export default function DailyPage() {
                           <span className="text-gray-500">実績時間</span>
                           <span className="font-bold text-blue-700">{realAssessmentActualMinutes}分</span>
                         </div>
+                        {realTotalCount > 0 && (
+                          <>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">実績件数</span>
+                              <span className="font-bold text-blue-700">{realTotalCount}件</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">実績点数</span>
+                              <span className="font-bold text-blue-700">{realTotalPoints}点</span>
+                            </div>
+                            <div className="flex justify-between text-xs">
+                              <span className="text-gray-500">平均スピード</span>
+                              <span className="font-bold text-green-700">{realAvgSpeed !== null ? `${realAvgSpeed}分/件` : '-'}</span>
+                            </div>
+                          </>
+                        )}
                         <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">達成率</span>
+                          <span className="text-gray-500">時間達成率</span>
                           <span className={`font-bold ${realRate >= 90 && realRate <= 110 ? 'text-green-600' : realRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
                             {realAssessmentPlanMinutes > 0 ? `${realRate}%` : '-'}
                           </span>
@@ -977,18 +1077,39 @@ export default function DailyPage() {
                             {realGap > 0 ? '+' : ''}{realGap}分
                           </span>
                         </div>
-                        {actualTimelineAggregation['【査定】計算書作成']?.members && (
+                        {(actualTimelineAggregation['【査定】計算書作成']?.members || realMemberPerf.length > 0) && (
                           <div className="pt-2 border-t border-rose-100">
                             <p className="text-[10px] text-gray-500 mb-1">担当者別実績</p>
-                            {Object.entries(actualTimelineAggregation['【査定】計算書作成'].members).map(([mid, mins]) => {
-                              const member = members.find(m => m.id === mid);
-                              return (
-                                <div key={mid} className="flex justify-between text-[10px]">
-                                  <span className="text-gray-600">{member?.name || mid}</span>
-                                  <span className="font-bold">{mins}分</span>
-                                </div>
-                              );
-                            })}
+                            <table className="w-full text-[10px]">
+                              <thead>
+                                <tr className="text-left text-gray-400">
+                                  <th className="pb-0.5">名前</th>
+                                  <th className="pb-0.5 text-right">時間</th>
+                                  <th className="pb-0.5 text-right">件数</th>
+                                  <th className="pb-0.5 text-right">点数</th>
+                                  <th className="pb-0.5 text-right">平均</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {realMemberPerf.length > 0 ? realMemberPerf.map(mp => (
+                                  <tr key={mp.name}>
+                                    <td className="text-gray-600">{mp.name}</td>
+                                    <td className="text-right font-bold">{mp.minutes}分</td>
+                                    <td className="text-right font-bold">{mp.count}件</td>
+                                    <td className="text-right font-bold">{mp.points}点</td>
+                                    <td className="text-right font-bold text-green-700">{mp.avgSpeed !== null ? `${mp.avgSpeed}分/件` : '-'}</td>
+                                  </tr>
+                                )) : Object.entries(actualTimelineAggregation['【査定】計算書作成']?.members || {}).map(([mid, mins]) => {
+                                  const member = members.find(m => m.id === mid);
+                                  return (
+                                    <tr key={mid}>
+                                      <td className="text-gray-600">{member?.name || mid}</td>
+                                      <td className="text-right font-bold" colSpan={4}>{mins}分</td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
                           </div>
                         )}
                       </div>

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getTaskDefinitions, calculateDailySummary, TASK_CATEGORIES, fmtNum } from '@/lib/store';
+import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, getTaskDefinitions, calculateDailySummary, TASK_CATEGORIES, fmtNum } from '@/lib/store';
+import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, ShippingRecord, ShiftEntry, TaskDefinition } from '@/lib/types';
 
 function ProgressRing({ percent, size = 120, stroke = 10, color = '#16a34a' }: { percent: number; size?: number; stroke?: number; color?: string }) {
@@ -76,6 +77,10 @@ export default function HomePage() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>([]);
+  const [performanceData, setPerformanceData] = useState<Record<string, Record<string, ActualPerformanceEntry>>>({});
+  const [perfEditingTask, setPerfEditingTask] = useState<string | null>(null);
+  const [perfEditCount, setPerfEditCount] = useState(0);
+  const [perfEditPoints, setPerfEditPoints] = useState(0);
   const currentMember = members.find(m => m.id === currentUserId);
 
   const tasksByCategory = useMemo(() => {
@@ -92,7 +97,34 @@ export default function HomePage() {
     setTimelineData(getTimelineForDate(selectedDate));
     setActualTimelineData(getActualTimelineForDate(selectedDate));
     setTaskDefs(getTaskDefinitions());
+    setPerformanceData(getActualPerformanceForDate(selectedDate));
   }, [selectedDate, dataVersion, currentUserId]);
+
+  // Tasks that track count/points (査定系)
+  const ASSESSMENT_TASKS = ['【査定】計算書作成', '【LINE】画像査定'];
+
+  // Calculate target points from member's speedRatings and planned timeline minutes
+  function getTargetPoints(taskName: string, minutes: number): number | null {
+    if (!currentMember || !ASSESSMENT_TASKS.includes(taskName)) return null;
+    const minutesPerUnit = currentMember.speedRatings[taskName];
+    if (!minutesPerUnit || minutesPerUnit <= 0) return null;
+    return Math.round((minutes / minutesPerUnit) * 10) / 10;
+  }
+
+  // Get my performance entry for a task
+  function getMyPerformance(taskName: string): ActualPerformanceEntry | null {
+    return performanceData[currentUserId]?.[taskName] || null;
+  }
+
+  // Save performance entry
+  function savePerformance(taskName: string, count: number, points: number) {
+    const newData = { ...performanceData };
+    if (!newData[currentUserId]) newData[currentUserId] = {};
+    newData[currentUserId][taskName] = { count, points };
+    setPerformanceData(newData);
+    setActualPerformanceForDate(selectedDate, newData);
+    setPerfEditingTask(null);
+  }
 
   const summary = calculateDailySummary(selectedDate);
 
@@ -478,13 +510,19 @@ export default function HomePage() {
             </div>
             {/* My task breakdown */}
             <div className="mt-3 space-y-1">
-              {Object.entries(myTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => (
-                <div key={taskName} className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
-                  <span className="text-xs text-gray-700 flex-1">{taskName}</span>
-                  <span className="text-xs font-bold text-gray-800">{mins}分</span>
-                </div>
-              ))}
+              {Object.entries(myTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => {
+                const targetPts = getTargetPoints(taskName, mins);
+                return (
+                  <div key={taskName} className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                    <span className="text-xs text-gray-700 flex-1">{taskName}</span>
+                    {targetPts !== null && (
+                      <span className="text-xs font-bold text-purple-600">目標 {targetPts}点</span>
+                    )}
+                    <span className="text-xs font-bold text-gray-800">{mins}分</span>
+                  </div>
+                );
+              })}
             </div>
           </div>
         )}
@@ -610,14 +648,64 @@ export default function HomePage() {
 
           {/* Actual task breakdown */}
           {Object.keys(myActualTimelineTasks).length > 0 && (
-            <div className="mt-3 space-y-1">
-              {Object.entries(myActualTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => (
-                <div key={taskName} className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
-                  <span className="text-xs text-gray-700 flex-1">{taskName}</span>
-                  <span className="text-xs font-bold text-blue-800">{mins}分</span>
-                </div>
-              ))}
+            <div className="mt-3 space-y-2">
+              {Object.entries(myActualTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => {
+                const isAssessment = ASSESSMENT_TASKS.includes(taskName);
+                const perf = getMyPerformance(taskName);
+                const isEditing = perfEditingTask === taskName;
+                const targetPts = getTargetPoints(taskName, myTimelineTasks[taskName] || 0);
+                const avgSpeed = perf && perf.count > 0 && mins > 0 ? Math.round((mins / perf.count) * 10) / 10 : null;
+                return (
+                  <div key={taskName}>
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                      <span className="text-xs text-gray-700 flex-1">{taskName}</span>
+                      <span className="text-xs font-bold text-blue-800">{mins}分</span>
+                    </div>
+                    {isAssessment && (
+                      <div className="ml-5 mt-1">
+                        {isEditing ? (
+                          <div className="flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
+                            <div className="flex items-center gap-1">
+                              <label className="text-[10px] text-gray-500">件数:</label>
+                              <input type="number" min="0" value={perfEditCount} onChange={e => setPerfEditCount(Number(e.target.value))}
+                                className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <label className="text-[10px] text-gray-500">点数:</label>
+                              <input type="number" min="0" value={perfEditPoints} onChange={e => setPerfEditPoints(Number(e.target.value))}
+                                className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
+                            </div>
+                            <button onClick={() => savePerformance(taskName, perfEditCount, perfEditPoints)}
+                              className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700">保存</button>
+                            <button onClick={() => setPerfEditingTask(null)}
+                              className="text-[10px] text-gray-500 hover:text-gray-700">取消</button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-3 text-[10px]">
+                            {perf ? (
+                              <>
+                                <span className="text-blue-700 font-bold">実績: {perf.count}件 / {perf.points}点</span>
+                                {targetPts !== null && <span className="text-purple-600">（目標 {targetPts}点）</span>}
+                                {avgSpeed !== null && <span className="text-green-700">平均 {avgSpeed}分/件</span>}
+                              </>
+                            ) : (
+                              <span className="text-gray-400">実績未入力</span>
+                            )}
+                            <button onClick={() => {
+                              setPerfEditingTask(taskName);
+                              setPerfEditCount(perf?.count || 0);
+                              setPerfEditPoints(perf?.points || 0);
+                            }} className="text-blue-600 hover:text-blue-800 underline">
+                              {perf ? '編集' : '入力'}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
               <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
                 <span className="text-xs font-bold text-gray-700 flex-1">合計</span>
                 <span className="text-xs font-bold text-blue-700">{myActualTimelineTotal}分</span>

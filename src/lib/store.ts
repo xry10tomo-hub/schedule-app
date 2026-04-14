@@ -205,6 +205,7 @@ export const STORAGE_KEYS = {
   timeline: 'schedule_timeline',
   actualTimeline: 'schedule_actual_timeline',
   handovers: 'schedule_handovers',
+  actualPerformance: 'schedule_actual_performance',
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -219,6 +220,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.timeline,
   STORAGE_KEYS.actualTimeline,
   STORAGE_KEYS.handovers,
+  STORAGE_KEYS.actualPerformance,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {
@@ -345,6 +347,26 @@ export function setActualTimelineForDate(date: string, blocks: Record<string, Re
   const all = getActualTimelineBlocks();
   all[date] = blocks;
   setActualTimelineBlocks(all);
+}
+
+// ============ Actual Performance (per-date, per-member, per-task: count/points) ============
+// Structure: { [date]: { [memberId]: { [taskName]: { count: number, points: number } } } }
+export type ActualPerformanceEntry = { count: number; points: number };
+export type ActualPerformanceData = Record<string, Record<string, Record<string, ActualPerformanceEntry>>>;
+
+export function getActualPerformanceAll(): ActualPerformanceData {
+  return getFromStorage(STORAGE_KEYS.actualPerformance, {});
+}
+export function setActualPerformanceAll(data: ActualPerformanceData) {
+  setToStorage(STORAGE_KEYS.actualPerformance, data);
+}
+export function getActualPerformanceForDate(date: string): Record<string, Record<string, ActualPerformanceEntry>> {
+  return getActualPerformanceAll()[date] || {};
+}
+export function setActualPerformanceForDate(date: string, data: Record<string, Record<string, ActualPerformanceEntry>>) {
+  const all = getActualPerformanceAll();
+  all[date] = data;
+  setActualPerformanceAll(all);
 }
 
 // ============ Handover Requests ============
