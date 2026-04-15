@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS } from '@/lib/store';
+import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady } from '@/lib/store';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
@@ -18,16 +18,26 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
   useEffect(() => {
     setCurrentUserIdState(getCurrentUser());
-    const initialMembers = getMembers();
-    setMembersState(initialMembers);
 
-    // Initialize Firestore: seed defaults if empty, then subscribe
-    // Use timeout to prevent blocking the UI if Firestore is slow
+    // Initialize Firestore: load remote data first, then enable writes
     async function initFirestore() {
       try {
         const timeoutPromise = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 5000));
         const firestorePromise = (async () => {
-          // Seed default data if Firestore is empty
+          // Step 1: Load Firestore data INTO localStorage (Firestore is the source of truth)
+          for (const key of SYNC_KEYS) {
+            const snap = await getDoc(doc(db, 'appData', key));
+            if (snap.exists()) {
+              // Firestore has data → write it to localStorage (overwrite local)
+              const data = snap.data().value;
+              localStorage.setItem(key, JSON.stringify(data));
+              if (key === STORAGE_KEYS.members) {
+                setMembersState(data as Member[]);
+              }
+            }
+          }
+
+          // Step 2: Seed defaults only for keys that don't exist in Firestore
           const defaults: [string, unknown][] = [
             [STORAGE_KEYS.members, DEFAULT_MEMBERS],
             [STORAGE_KEYS.tasks, DEFAULT_TASKS],
@@ -37,10 +47,11 @@ export default function AppProvider({ children }: { children: React.ReactNode })
             const snap = await getDoc(doc(db, 'appData', key));
             if (!snap.exists()) {
               await setDoc(doc(db, 'appData', key), { value: defaultVal, updatedAt: Date.now() });
+              localStorage.setItem(key, JSON.stringify(defaultVal));
             }
           }
 
-          // Also push any existing localStorage data that's not yet in Firestore
+          // Step 3: Push any localStorage-only data to Firestore (for non-default keys)
           for (const key of SYNC_KEYS) {
             const snap = await getDoc(doc(db, 'appData', key));
             if (!snap.exists()) {
@@ -65,9 +76,15 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         }
       } catch (err) {
         console.error('Firestore init error:', err);
-        // App still works with localStorage only
         setFirestoreReady(false);
       }
+
+      // Now read members from localStorage (which now has Firestore data)
+      const loadedMembers = getMembers();
+      setMembersState(loadedMembers);
+
+      // Enable Firestore writes now that we have loaded remote data
+      setFirestoreSyncReady(true);
       setLoading(false);
     }
     initFirestore();
@@ -83,11 +100,9 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         if (snap.exists() && !snap.metadata.hasPendingWrites) {
           const data = snap.data().value;
           localStorage.setItem(key, JSON.stringify(data));
-          // Update members state if it's the members key
           if (key === STORAGE_KEYS.members) {
             setMembersState(data as Member[]);
           }
-          // Bump version to trigger re-renders in pages
           setDataVersion(v => v + 1);
         }
       })

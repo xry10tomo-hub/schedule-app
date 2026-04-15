@@ -233,6 +233,25 @@ function getFromStorage<T>(key: string, defaultValue: T): T {
   }
 }
 
+// Firestore sync readiness flag - blocks writes until initial Firestore data is loaded
+let firestoreSyncReady = false;
+const pendingWrites = new Map<string, unknown>();
+
+export function setFirestoreSyncReady(ready: boolean) {
+  firestoreSyncReady = ready;
+  // Flush any pending writes that accumulated before Firestore was ready
+  if (ready && pendingWrites.size > 0) {
+    for (const [key, value] of pendingWrites) {
+      debouncedFirestoreSync(key, value);
+    }
+    pendingWrites.clear();
+  }
+}
+
+export function isFirestoreSyncReady(): boolean {
+  return firestoreSyncReady;
+}
+
 // Debounce Firestore writes per key to prevent write-stream exhaustion
 const firestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
 function debouncedFirestoreSync(key: string, value: unknown) {
@@ -252,7 +271,12 @@ function setToStorage<T>(key: string, value: T): void {
   localStorage.setItem(key, JSON.stringify(value));
   // Sync to Firestore for shared data (debounced)
   if (SYNC_KEYS.has(key)) {
-    debouncedFirestoreSync(key, value);
+    if (firestoreSyncReady) {
+      debouncedFirestoreSync(key, value);
+    } else {
+      // Queue the write until Firestore data has been loaded
+      pendingWrites.set(key, value);
+    }
   }
 }
 
