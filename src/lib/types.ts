@@ -84,7 +84,7 @@ export interface DailySummary {
   gapMinutes: number;
 }
 
-export type HandoverStatus = 'pending' | 'approved' | 'rejected';
+export type HandoverStatus = 'pending' | 'approved' | 'rejected' | 'shared';
 
 export interface HandoverRequest {
   id: string;

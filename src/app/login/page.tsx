@@ -71,7 +71,6 @@ export default function LoginPage() {
                     `}
                   >
                     {m.name}
-                    {m.isAdmin && <span className="ml-1 text-xs text-green-600">★</span>}
                   </button>
                 ))}
               </div>

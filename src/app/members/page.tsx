@@ -158,7 +158,6 @@ export default function MembersPage() {
                 <span className={`text-xs px-2 py-0.5 rounded-full ${
                   member.role === 'employee' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                 }`}>{member.role === 'employee' ? '社員' : 'アルバイト'}</span>
-                {member.isAdmin && <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">管理者</span>}
               </div>
             </div>
           </div>

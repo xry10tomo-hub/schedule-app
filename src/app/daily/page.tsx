@@ -86,7 +86,7 @@ export default function DailyPage() {
 
   const syncMonthlyTasks = useCallback(() => {
     const monthlySchedules = getMonthlySchedules().filter(s => s.date === selectedDate);
-    const approvedHandovers = getHandovers().filter(h => h.status === 'approved' && h.targetDate === selectedDate);
+    const approvedHandovers = getHandovers().filter(h => (h.status === 'approved' || h.status === 'shared') && h.targetDate === selectedDate);
     const existingDaily = getDailyTasks();
     const dailyForDate = existingDaily.filter(t => t.date === selectedDate);
 

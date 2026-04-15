@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, migrateMembers, setMembers } from '@/lib/store';
+import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS } from '@/lib/store';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
@@ -20,8 +20,6 @@ export default function AppProvider({ children }: { children: React.ReactNode })
     setCurrentUserIdState(getCurrentUser());
     const initialMembers = getMembers();
     setMembersState(initialMembers);
-    // Persist migrated members back so the change syncs to all devices
-    setMembers(initialMembers);
 
     // Initialize Firestore: seed defaults if empty, then subscribe
     // Use timeout to prevent blocking the UI if Firestore is slow
@@ -87,12 +85,7 @@ export default function AppProvider({ children }: { children: React.ReactNode })
           localStorage.setItem(key, JSON.stringify(data));
           // Update members state if it's the members key
           if (key === STORAGE_KEYS.members) {
-            const migrated = migrateMembers(data as Member[]);
-            // If migration changed anything, persist back to Firestore so it sticks
-            if (JSON.stringify(migrated) !== JSON.stringify(data)) {
-              setMembers(migrated);
-            }
-            setMembersState(migrated);
+            setMembersState(data as Member[]);
           }
           // Bump version to trigger re-renders in pages
           setDataVersion(v => v + 1);

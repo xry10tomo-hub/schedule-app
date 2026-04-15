@@ -258,18 +258,8 @@ function setToStorage<T>(key: string, value: T): void {
 
 // ============ Data Access Functions ============
 
-// Migration: admin moved from 鈴木 to 潮田
-export function migrateMembers(raw: Member[]): Member[] {
-  return raw.map(m => {
-    if (m.id === 'suzuki' && m.isAdmin) return { ...m, isAdmin: false };
-    if (m.id === 'ushioda' && !m.isAdmin) return { ...m, isAdmin: true };
-    return m;
-  });
-}
-
 export function getMembers(): Member[] {
-  const raw = getFromStorage(STORAGE_KEYS.members, DEFAULT_MEMBERS);
-  return migrateMembers(raw);
+  return getFromStorage(STORAGE_KEYS.members, DEFAULT_MEMBERS);
 }
 export function setMembers(members: Member[]) {
   setToStorage(STORAGE_KEYS.members, members);

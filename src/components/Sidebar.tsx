@@ -8,12 +8,12 @@ const NAV_ITEMS = [
   { href: '/home', label: 'ホーム', icon: '📊' },
   { href: '/calendar', label: '月次カレンダー', icon: '📅' },
   { href: '/daily', label: '日次業務入力', icon: '📝' },
-  { href: '/handover', label: '引き継ぎ', icon: '🔄' },
+  { href: '/handover', label: '引き継ぎ共有BOX', icon: '🔄' },
   { href: '/shipping', label: '郵送点数', icon: '📦' },
   { href: '/members', label: '業務及びメンバー管理', icon: '👥' },
   { href: '/shifts', label: 'シフト一覧', icon: '🕐' },
   { href: '/auto-assign', label: '自動割振', icon: '🤖' },
-  { href: '/admin', label: '管理者ダッシュボード', icon: '⚙️' },
+  { href: '/admin', label: 'ダッシュボード', icon: '⚙️' },
 ];
 
 export default function Sidebar() {
