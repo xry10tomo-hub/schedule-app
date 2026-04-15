@@ -78,9 +78,6 @@ export default function HomePage() {
   const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>([]);
   const [performanceData, setPerformanceData] = useState<Record<string, Record<string, ActualPerformanceEntry>>>({});
-  const [perfEditingTask, setPerfEditingTask] = useState<string | null>(null);
-  const [perfEditCount, setPerfEditCount] = useState(0);
-  const [perfEditPoints, setPerfEditPoints] = useState(0);
   const currentMember = members.find(m => m.id === currentUserId);
 
   const tasksByCategory = useMemo(() => {
@@ -100,12 +97,20 @@ export default function HomePage() {
     setPerformanceData(getActualPerformanceForDate(selectedDate));
   }, [selectedDate, dataVersion, currentUserId]);
 
-  // Tasks that track count/points (査定系)
-  const ASSESSMENT_TASKS = ['【査定】計算書作成', '【LINE】画像査定'];
+  // Task performance tracking config
+  const TASK_PERF_CONFIG: Record<string, { count?: boolean; points?: boolean }> = {
+    '【LINE】画像査定': { points: true },
+    '【査定】計算書作成': { count: true, points: true },
+    '【査定】計算書提出': { count: true },
+    '【査定】計算書（下書き）': { count: true },
+    '【補助】郵送物開封': { count: true },
+    '【補助】返送': { count: true },
+    '【営業】商材追い電話': { count: true, points: true },
+  };
 
   // Calculate target points from member's speedRatings and planned timeline minutes
   function getTargetPoints(taskName: string, minutes: number): number | null {
-    if (!currentMember || !ASSESSMENT_TASKS.includes(taskName)) return null;
+    if (!currentMember || !TASK_PERF_CONFIG[taskName]) return null;
     const minutesPerUnit = currentMember.speedRatings[taskName];
     if (!minutesPerUnit || minutesPerUnit <= 0) return null;
     return Math.round((minutes / minutesPerUnit) * 10) / 10;
@@ -116,14 +121,14 @@ export default function HomePage() {
     return performanceData[currentUserId]?.[taskName] || null;
   }
 
-  // Save performance entry
-  function savePerformance(taskName: string, count: number, points: number) {
+  // Save performance entry for a specific field
+  function saveMyPerformance(taskName: string, field: 'count' | 'points', value: number) {
     const newData = { ...performanceData };
     if (!newData[currentUserId]) newData[currentUserId] = {};
-    newData[currentUserId][taskName] = { count, points };
+    if (!newData[currentUserId][taskName]) newData[currentUserId][taskName] = { count: 0, points: 0 };
+    newData[currentUserId][taskName][field] = value;
     setPerformanceData(newData);
     setActualPerformanceForDate(selectedDate, newData);
-    setPerfEditingTask(null);
   }
 
   const summary = calculateDailySummary(selectedDate);
@@ -643,56 +648,39 @@ export default function HomePage() {
           {Object.keys(myActualTimelineTasks).length > 0 && (
             <div className="mt-3 space-y-2">
               {Object.entries(myActualTimelineTasks).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => {
-                const isAssessment = ASSESSMENT_TASKS.includes(taskName);
+                const perfConfig = TASK_PERF_CONFIG[taskName];
                 const perf = getMyPerformance(taskName);
-                const isEditing = perfEditingTask === taskName;
                 const targetPts = getTargetPoints(taskName, myTimelineTasks[taskName] || 0);
-                const avgSpeed = perf && perf.count > 0 && mins > 0 ? Math.round((mins / perf.count) * 10) / 10 : null;
+                const countForSpeed = perf?.count || 0;
+                const avgSpeed = countForSpeed > 0 && mins > 0 ? Math.round((mins / countForSpeed) * 10) / 10 : null;
                 return (
-                  <div key={taskName}>
+                  <div key={taskName} className={`rounded-lg ${perfConfig ? 'bg-blue-50/50 p-2' : ''}`}>
                     <div className="flex items-center gap-2">
                       <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
                       <span className="text-xs text-gray-700 flex-1">{taskName}</span>
+                      {targetPts !== null && <span className="text-[10px] text-purple-600">目標{targetPts}点</span>}
                       <span className="text-xs font-bold text-blue-800">{mins}分</span>
                     </div>
-                    {isAssessment && (
-                      <div className="ml-5 mt-1">
-                        {isEditing ? (
-                          <div className="flex items-center gap-2 bg-blue-50 rounded-lg px-3 py-2">
-                            <div className="flex items-center gap-1">
-                              <label className="text-[10px] text-gray-500">件数:</label>
-                              <input type="number" min="0" value={perfEditCount} onChange={e => setPerfEditCount(Number(e.target.value))}
-                                className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
-                            </div>
-                            <div className="flex items-center gap-1">
-                              <label className="text-[10px] text-gray-500">点数:</label>
-                              <input type="number" min="0" value={perfEditPoints} onChange={e => setPerfEditPoints(Number(e.target.value))}
-                                className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
-                            </div>
-                            <button onClick={() => savePerformance(taskName, perfEditCount, perfEditPoints)}
-                              className="text-[10px] bg-blue-600 text-white px-2 py-0.5 rounded hover:bg-blue-700">保存</button>
-                            <button onClick={() => setPerfEditingTask(null)}
-                              className="text-[10px] text-gray-500 hover:text-gray-700">取消</button>
+                    {perfConfig && (
+                      <div className="ml-5 mt-1.5 flex items-center gap-3 flex-wrap">
+                        {perfConfig.count && (
+                          <div className="flex items-center gap-1">
+                            <label className="text-[10px] text-gray-500">件数:</label>
+                            <input type="number" min="0" value={perf?.count || 0}
+                              onChange={e => saveMyPerformance(taskName, 'count', Number(e.target.value))}
+                              className="w-16 border rounded px-1.5 py-0.5 text-xs text-center bg-white" />
                           </div>
-                        ) : (
-                          <div className="flex items-center gap-3 text-[10px]">
-                            {perf ? (
-                              <>
-                                <span className="text-blue-700 font-bold">実績: {perf.count}件 / {perf.points}点</span>
-                                {targetPts !== null && <span className="text-purple-600">（目標 {targetPts}点）</span>}
-                                {avgSpeed !== null && <span className="text-green-700">平均 {avgSpeed}分/件</span>}
-                              </>
-                            ) : (
-                              <span className="text-gray-400">実績未入力</span>
-                            )}
-                            <button onClick={() => {
-                              setPerfEditingTask(taskName);
-                              setPerfEditCount(perf?.count || 0);
-                              setPerfEditPoints(perf?.points || 0);
-                            }} className="text-blue-600 hover:text-blue-800 underline">
-                              {perf ? '編集' : '入力'}
-                            </button>
+                        )}
+                        {perfConfig.points && (
+                          <div className="flex items-center gap-1">
+                            <label className="text-[10px] text-gray-500">点数:</label>
+                            <input type="number" min="0" value={perf?.points || 0}
+                              onChange={e => saveMyPerformance(taskName, 'points', Number(e.target.value))}
+                              className="w-16 border rounded px-1.5 py-0.5 text-xs text-center bg-white" />
                           </div>
+                        )}
+                        {avgSpeed !== null && (
+                          <span className="text-[10px] text-green-700 font-bold">平均 {avgSpeed}分/件</span>
                         )}
                       </div>
                     )}

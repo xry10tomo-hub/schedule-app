@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
 
@@ -182,15 +182,6 @@ export default function DailyPage() {
     setPerformanceDataState(getActualPerformanceForDate(selectedDate));
   }, [syncMonthlyTasks, selectedDate, dataVersion]);
 
-  // Save performance data helper
-  function updatePerformance(memberId: string, taskName: string, field: 'count' | 'points', value: number) {
-    const newData = { ...performanceData };
-    if (!newData[memberId]) newData[memberId] = {};
-    if (!newData[memberId][taskName]) newData[memberId][taskName] = { count: 0, points: 0 };
-    newData[memberId][taskName][field] = value;
-    setPerformanceDataState(newData);
-    setActualPerformanceForDate(selectedDate, newData);
-  }
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
@@ -826,55 +817,6 @@ export default function DailyPage() {
               </table>
             </div>
 
-            {/* Per-member performance input for tracked tasks */}
-            {Object.keys(actualTimelineAggregation).some(tn => TASK_PERF_CONFIG[tn]) && (
-              <div className="border-t border-gray-100 p-4">
-                <h4 className="text-xs font-bold text-purple-700 mb-3">📝 業務別 実績件数・点数入力</h4>
-                <div className="space-y-3">
-                  {Object.entries(actualTimelineAggregation)
-                    .filter(([tn]) => TASK_PERF_CONFIG[tn])
-                    .map(([taskName, agg]) => {
-                      const config = TASK_PERF_CONFIG[taskName];
-                      return (
-                        <div key={taskName} className="bg-purple-50/50 rounded-lg p-3">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
-                            <span className="text-xs font-bold text-gray-800">{taskName}</span>
-                          </div>
-                          <div className="space-y-1.5">
-                            {Object.entries(agg.members).map(([memberId, mins]) => {
-                              const member = members.find(m => m.id === memberId);
-                              const perf = performanceData[memberId]?.[taskName] || { count: 0, points: 0 };
-                              return (
-                                <div key={memberId} className="flex items-center gap-3 bg-white rounded px-3 py-1.5">
-                                  <span className="text-xs text-gray-700 w-16 flex-shrink-0">{member?.name || memberId}</span>
-                                  <span className="text-[10px] text-gray-400">{mins}分</span>
-                                  {config?.count && (
-                                    <div className="flex items-center gap-1">
-                                      <label className="text-[10px] text-gray-500">件数:</label>
-                                      <input type="number" min="0" value={perf.count}
-                                        onChange={e => updatePerformance(memberId, taskName, 'count', Number(e.target.value))}
-                                        className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
-                                    </div>
-                                  )}
-                                  {config?.points && (
-                                    <div className="flex items-center gap-1">
-                                      <label className="text-[10px] text-gray-500">点数:</label>
-                                      <input type="number" min="0" value={perf.points}
-                                        onChange={e => updatePerformance(memberId, taskName, 'points', Number(e.target.value))}
-                                        className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
           </div>
         )}
 
