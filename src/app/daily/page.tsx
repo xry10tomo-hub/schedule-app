@@ -2,8 +2,20 @@
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
+
+// Task performance tracking config: which tasks track count and/or points
+const TASK_PERF_CONFIG: Record<string, { count?: boolean; points?: boolean }> = {
+  '【LINE】画像査定': { points: true },
+  '【査定】計算書作成': { count: true, points: true },
+  '【査定】計算書提出': { count: true },
+  '【査定】計算書（下書き）': { count: true },
+  '【補助】郵送物開封': { count: true },
+  '【補助】返送': { count: true },
+  '【営業】商材追い電話': { count: true, points: true },
+};
 
 // Timeline constants
 const TIMELINE_START = 8; // 8:00
@@ -51,6 +63,9 @@ export default function DailyPage() {
   const [selectedPaintTask, setSelectedPaintTask] = useState('');
   const [isDragging, setIsDragging] = useState(false);
   const [dragMode, setDragMode] = useState<'add' | 'remove'>('add');
+
+  // Performance data state (per-member, per-task: count/points)
+  const [performanceData, setPerformanceDataState] = useState<Record<string, Record<string, ActualPerformanceEntry>>>({});
 
   // Form state
   const [formCategory, setFormCategory] = useState('');
@@ -164,7 +179,18 @@ export default function DailyPage() {
     setTasksState(sortTasks(tasksForDate));
     setTimelineDataState(getTimelineForDate(selectedDate));
     setActualTimelineDataState(getActualTimelineForDate(selectedDate));
+    setPerformanceDataState(getActualPerformanceForDate(selectedDate));
   }, [syncMonthlyTasks, selectedDate, dataVersion]);
+
+  // Save performance data helper
+  function updatePerformance(memberId: string, taskName: string, field: 'count' | 'points', value: number) {
+    const newData = { ...performanceData };
+    if (!newData[memberId]) newData[memberId] = {};
+    if (!newData[memberId][taskName]) newData[memberId][taskName] = { count: 0, points: 0 };
+    newData[memberId][taskName][field] = value;
+    setPerformanceDataState(newData);
+    setActualPerformanceForDate(selectedDate, newData);
+  }
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
@@ -667,7 +693,7 @@ export default function DailyPage() {
           </div>
         )}
 
-        {/* Actual Tab - same layout as plan tab, data from actual timeline aggregation */}
+        {/* Actual Tab - with count/points input for tracked tasks */}
         {viewTab === 'actual' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="overflow-x-auto">
@@ -678,12 +704,14 @@ export default function DailyPage() {
                     <th className="px-4 py-3 font-semibold">予定時間(分)</th>
                     <th className="px-4 py-3 font-semibold">実績時間(分)</th>
                     <th className="px-4 py-3 font-semibold">差分</th>
+                    <th className="px-4 py-3 font-semibold">件数</th>
+                    <th className="px-4 py-3 font-semibold">点数</th>
+                    <th className="px-4 py-3 font-semibold">平均スピード</th>
                     <th className="px-4 py-3 font-semibold">担当者（実績）</th>
                   </tr>
                 </thead>
                 <tbody>
                   {(() => {
-                    // Merge plan tasks with actual timeline data
                     const allTaskNames = new Set<string>();
                     tasks.forEach(t => allTaskNames.add(t.taskName));
                     Object.keys(actualTimelineAggregation).forEach(tn => allTaskNames.add(tn));
@@ -691,7 +719,7 @@ export default function DailyPage() {
 
                     if (sortedNames.length === 0) {
                       return (
-                        <tr><td colSpan={5} className="px-4 py-12 text-center text-gray-400">タスクがありません。各自がホーム画面で実績を入力すると、ここに集計されます。</td></tr>
+                        <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">タスクがありません。各自がホーム画面で実績を入力すると、ここに集計されます。</td></tr>
                       );
                     }
 
@@ -701,9 +729,17 @@ export default function DailyPage() {
                       const actual = actualTimelineAggregation[taskName];
                       const actualMinutes = actual?.totalMinutes || 0;
                       const gap = actualMinutes - plannedMinutes;
-
-                      // Members who actually worked on this task
                       const memberEntries = actual?.members || {};
+                      const perfConfig = TASK_PERF_CONFIG[taskName];
+
+                      // Aggregate performance across all members for this task
+                      let totalCount = 0, totalPoints = 0;
+                      Object.entries(performanceData).forEach(([, taskPerfs]) => {
+                        const entry = taskPerfs[taskName];
+                        if (entry) { totalCount += entry.count; totalPoints += entry.points; }
+                      });
+                      const avgSpeed = totalCount > 0 && actualMinutes > 0
+                        ? Math.round((actualMinutes / totalCount) * 10) / 10 : null;
 
                       return (
                         <tr key={taskName} className="border-b border-gray-50 hover:bg-blue-50/30">
@@ -725,13 +761,43 @@ export default function DailyPage() {
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            <div className="flex flex-wrap gap-1">
+                            {perfConfig?.count ? (
+                              <span className="text-xs font-bold text-purple-700">{totalCount}件</span>
+                            ) : <span className="text-xs text-gray-300">-</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {perfConfig?.points ? (
+                              <span className="text-xs font-bold text-purple-700">{totalPoints}点</span>
+                            ) : <span className="text-xs text-gray-300">-</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            {perfConfig && avgSpeed !== null ? (
+                              <span className="text-xs font-bold text-green-700">{avgSpeed}分/件</span>
+                            ) : <span className="text-xs text-gray-300">-</span>}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-1">
                               {Object.entries(memberEntries).map(([memberId, mins]) => {
                                 const member = members.find(m => m.id === memberId);
+                                const memberPerf = performanceData[memberId]?.[taskName];
+                                const memberSpeed = memberPerf && memberPerf.count > 0 && mins > 0
+                                  ? Math.round((mins / memberPerf.count) * 10) / 10 : null;
                                 return (
-                                  <span key={memberId} className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">
-                                    {member?.name || memberId}: {mins}分
-                                  </span>
+                                  <div key={memberId} className="flex items-center gap-1 flex-wrap">
+                                    <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">
+                                      {member?.name || memberId}: {mins}分
+                                    </span>
+                                    {perfConfig && memberPerf && (
+                                      <span className="text-[10px] text-purple-600">
+                                        {perfConfig.count && `${memberPerf.count}件`}
+                                        {perfConfig.count && perfConfig.points && ' / '}
+                                        {perfConfig.points && `${memberPerf.points}点`}
+                                      </span>
+                                    )}
+                                    {perfConfig && memberSpeed !== null && (
+                                      <span className="text-[10px] text-green-600">{memberSpeed}分/件</span>
+                                    )}
+                                  </div>
                                 );
                               })}
                               {Object.keys(memberEntries).length === 0 && (
@@ -753,12 +819,62 @@ export default function DailyPage() {
                           {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{totalActualMinutes - totalRequiredMinutes}分
                         </span>
                       </td>
-                      <td className="px-4 py-3"></td>
+                      <td className="px-4 py-3" colSpan={4}></td>
                     </tr>
                   )}
                 </tbody>
               </table>
             </div>
+
+            {/* Per-member performance input for tracked tasks */}
+            {Object.keys(actualTimelineAggregation).some(tn => TASK_PERF_CONFIG[tn]) && (
+              <div className="border-t border-gray-100 p-4">
+                <h4 className="text-xs font-bold text-purple-700 mb-3">📝 業務別 実績件数・点数入力</h4>
+                <div className="space-y-3">
+                  {Object.entries(actualTimelineAggregation)
+                    .filter(([tn]) => TASK_PERF_CONFIG[tn])
+                    .map(([taskName, agg]) => {
+                      const config = TASK_PERF_CONFIG[taskName];
+                      return (
+                        <div key={taskName} className="bg-purple-50/50 rounded-lg p-3">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                            <span className="text-xs font-bold text-gray-800">{taskName}</span>
+                          </div>
+                          <div className="space-y-1.5">
+                            {Object.entries(agg.members).map(([memberId, mins]) => {
+                              const member = members.find(m => m.id === memberId);
+                              const perf = performanceData[memberId]?.[taskName] || { count: 0, points: 0 };
+                              return (
+                                <div key={memberId} className="flex items-center gap-3 bg-white rounded px-3 py-1.5">
+                                  <span className="text-xs text-gray-700 w-16 flex-shrink-0">{member?.name || memberId}</span>
+                                  <span className="text-[10px] text-gray-400">{mins}分</span>
+                                  {config?.count && (
+                                    <div className="flex items-center gap-1">
+                                      <label className="text-[10px] text-gray-500">件数:</label>
+                                      <input type="number" min="0" value={perf.count}
+                                        onChange={e => updatePerformance(memberId, taskName, 'count', Number(e.target.value))}
+                                        className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
+                                    </div>
+                                  )}
+                                  {config?.points && (
+                                    <div className="flex items-center gap-1">
+                                      <label className="text-[10px] text-gray-500">点数:</label>
+                                      <input type="number" min="0" value={perf.points}
+                                        onChange={e => updatePerformance(memberId, taskName, 'points', Number(e.target.value))}
+                                        className="w-16 border rounded px-1.5 py-0.5 text-xs text-center" />
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -940,179 +1056,93 @@ export default function DailyPage() {
                     </div>
                   </div>
 
-                  {/* 画像査定 & 実査定 Evaluation */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5">
-                      <h3 className="text-sm font-bold text-purple-700 mb-3 flex items-center gap-2">
-                        <span className="w-1.5 h-5 bg-purple-500 rounded-full" />
-                        画像査定 評価
-                      </h3>
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">予定件数</span>
-                          <span className="font-bold">{imageAssessmentPlannedPoints}点</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">予定時間</span>
-                          <span className="font-bold">{imageAssessmentPlanMinutes}分</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">実績時間</span>
-                          <span className="font-bold text-blue-700">{imageAssessmentActualMinutes}分</span>
-                        </div>
-                        {imageTotalCount > 0 && (
-                          <>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">実績件数</span>
-                              <span className="font-bold text-blue-700">{imageTotalCount}件</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">実績点数</span>
-                              <span className="font-bold text-blue-700">{imageTotalPoints}点</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">平均スピード</span>
-                              <span className="font-bold text-green-700">{imageAvgSpeed !== null ? `${imageAvgSpeed}分/件` : '-'}</span>
-                            </div>
-                          </>
-                        )}
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">時間達成率</span>
-                          <span className={`font-bold ${imageRate >= 90 && imageRate <= 110 ? 'text-green-600' : imageRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
-                            {imageAssessmentPlanMinutes > 0 ? `${imageRate}%` : '-'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">差分</span>
-                          <span className={`font-bold ${imageGap > 0 ? 'text-red-500' : imageGap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                            {imageGap > 0 ? '+' : ''}{imageGap}分
-                          </span>
-                        </div>
-                        {/* Members working on image assessment */}
-                        {(actualTimelineAggregation['【LINE】画像査定']?.members || imageMemberPerf.length > 0) && (
-                          <div className="pt-2 border-t border-purple-100">
-                            <p className="text-[10px] text-gray-500 mb-1">担当者別実績</p>
-                            <table className="w-full text-[10px]">
-                              <thead>
-                                <tr className="text-left text-gray-400">
-                                  <th className="pb-0.5">名前</th>
-                                  <th className="pb-0.5 text-right">時間</th>
-                                  <th className="pb-0.5 text-right">件数</th>
-                                  <th className="pb-0.5 text-right">点数</th>
-                                  <th className="pb-0.5 text-right">平均</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {imageMemberPerf.length > 0 ? imageMemberPerf.map(mp => (
-                                  <tr key={mp.name}>
-                                    <td className="text-gray-600">{mp.name}</td>
-                                    <td className="text-right font-bold">{mp.minutes}分</td>
-                                    <td className="text-right font-bold">{mp.count}件</td>
-                                    <td className="text-right font-bold">{mp.points}点</td>
-                                    <td className="text-right font-bold text-green-700">{mp.avgSpeed !== null ? `${mp.avgSpeed}分/件` : '-'}</td>
-                                  </tr>
-                                )) : Object.entries(actualTimelineAggregation['【LINE】画像査定']?.members || {}).map(([mid, mins]) => {
-                                  const member = members.find(m => m.id === mid);
-                                  return (
-                                    <tr key={mid}>
-                                      <td className="text-gray-600">{member?.name || mid}</td>
-                                      <td className="text-right font-bold" colSpan={4}>{mins}分</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
-                    </div>
+                  {/* Tracked Tasks Performance Summary */}
+                  <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5">
+                    <h3 className="text-sm font-bold text-purple-700 mb-4 flex items-center gap-2">
+                      <span className="w-1.5 h-5 bg-purple-500 rounded-full" />
+                      業務別 実績集計
+                    </h3>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-purple-50">
+                          <tr className="text-left text-gray-600">
+                            <th className="px-3 py-2 font-semibold">業務名</th>
+                            <th className="px-3 py-2 font-semibold text-right">予定時間</th>
+                            <th className="px-3 py-2 font-semibold text-right">実績時間</th>
+                            <th className="px-3 py-2 font-semibold text-right">差分</th>
+                            <th className="px-3 py-2 font-semibold text-right">件数</th>
+                            <th className="px-3 py-2 font-semibold text-right">点数</th>
+                            <th className="px-3 py-2 font-semibold text-right">平均スピード</th>
+                            <th className="px-3 py-2 font-semibold">担当者（実績）</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {Object.entries(TASK_PERF_CONFIG).map(([taskName, config]) => {
+                            const planMinutes = tasks.filter(t => t.taskName === taskName).reduce((s, t) => s + t.plannedMinutes, 0);
+                            const actualMinutes = actualTimelineAggregation[taskName]?.totalMinutes || 0;
+                            const gap = actualMinutes - planMinutes;
+                            const memberEntries = actualTimelineAggregation[taskName]?.members || {};
 
-                    <div className="bg-white rounded-xl shadow-sm border border-rose-200 p-5">
-                      <h3 className="text-sm font-bold text-rose-700 mb-3 flex items-center gap-2">
-                        <span className="w-1.5 h-5 bg-rose-500 rounded-full" />
-                        実査定 評価
-                      </h3>
-                      <div className="space-y-2">
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">計算書作成 予定件数</span>
-                          <span className="font-bold">{realAssessmentPoints}点</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">郵送物開封 予定件数</span>
-                          <span className="font-bold">{realAssessmentCount}件</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">予定時間</span>
-                          <span className="font-bold">{realAssessmentPlanMinutes}分</span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">実績時間</span>
-                          <span className="font-bold text-blue-700">{realAssessmentActualMinutes}分</span>
-                        </div>
-                        {realTotalCount > 0 && (
-                          <>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">実績件数</span>
-                              <span className="font-bold text-blue-700">{realTotalCount}件</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">実績点数</span>
-                              <span className="font-bold text-blue-700">{realTotalPoints}点</span>
-                            </div>
-                            <div className="flex justify-between text-xs">
-                              <span className="text-gray-500">平均スピード</span>
-                              <span className="font-bold text-green-700">{realAvgSpeed !== null ? `${realAvgSpeed}分/件` : '-'}</span>
-                            </div>
-                          </>
-                        )}
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">時間達成率</span>
-                          <span className={`font-bold ${realRate >= 90 && realRate <= 110 ? 'text-green-600' : realRate >= 70 ? 'text-amber-600' : 'text-red-600'}`}>
-                            {realAssessmentPlanMinutes > 0 ? `${realRate}%` : '-'}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-xs">
-                          <span className="text-gray-500">差分</span>
-                          <span className={`font-bold ${realGap > 0 ? 'text-red-500' : realGap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                            {realGap > 0 ? '+' : ''}{realGap}分
-                          </span>
-                        </div>
-                        {(actualTimelineAggregation['【査定】計算書作成']?.members || realMemberPerf.length > 0) && (
-                          <div className="pt-2 border-t border-rose-100">
-                            <p className="text-[10px] text-gray-500 mb-1">担当者別実績</p>
-                            <table className="w-full text-[10px]">
-                              <thead>
-                                <tr className="text-left text-gray-400">
-                                  <th className="pb-0.5">名前</th>
-                                  <th className="pb-0.5 text-right">時間</th>
-                                  <th className="pb-0.5 text-right">件数</th>
-                                  <th className="pb-0.5 text-right">点数</th>
-                                  <th className="pb-0.5 text-right">平均</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {realMemberPerf.length > 0 ? realMemberPerf.map(mp => (
-                                  <tr key={mp.name}>
-                                    <td className="text-gray-600">{mp.name}</td>
-                                    <td className="text-right font-bold">{mp.minutes}分</td>
-                                    <td className="text-right font-bold">{mp.count}件</td>
-                                    <td className="text-right font-bold">{mp.points}点</td>
-                                    <td className="text-right font-bold text-green-700">{mp.avgSpeed !== null ? `${mp.avgSpeed}分/件` : '-'}</td>
-                                  </tr>
-                                )) : Object.entries(actualTimelineAggregation['【査定】計算書作成']?.members || {}).map(([mid, mins]) => {
-                                  const member = members.find(m => m.id === mid);
-                                  return (
-                                    <tr key={mid}>
-                                      <td className="text-gray-600">{member?.name || mid}</td>
-                                      <td className="text-right font-bold" colSpan={4}>{mins}分</td>
-                                    </tr>
-                                  );
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        )}
-                      </div>
+                            // Aggregate performance
+                            let totalCount = 0, totalPoints = 0;
+                            const memberPerfs: { name: string; memberId: string; count: number; points: number; minutes: number; speed: number | null }[] = [];
+                            Object.entries(memberEntries).forEach(([mid, mins]) => {
+                              const m = members.find(mm => mm.id === mid);
+                              const perf = perfData[mid]?.[taskName];
+                              const cnt = perf?.count || 0;
+                              const pts = perf?.points || 0;
+                              totalCount += cnt;
+                              totalPoints += pts;
+                              memberPerfs.push({
+                                name: m?.name || mid, memberId: mid, count: cnt, points: pts, minutes: mins,
+                                speed: cnt > 0 && mins > 0 ? Math.round((mins / cnt) * 10) / 10 : null,
+                              });
+                            });
+                            const avgSpeed = totalCount > 0 && actualMinutes > 0
+                              ? Math.round((actualMinutes / totalCount) * 10) / 10 : null;
+
+                            if (planMinutes === 0 && actualMinutes === 0) return null;
+
+                            return (
+                              <tr key={taskName} className="border-b border-purple-50 hover:bg-purple-50/30">
+                                <td className="px-3 py-2 font-medium">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                                    <span>{taskName}</span>
+                                  </div>
+                                </td>
+                                <td className="px-3 py-2 text-right text-gray-600">{planMinutes}分</td>
+                                <td className="px-3 py-2 text-right font-bold text-blue-700">{actualMinutes}分</td>
+                                <td className={`px-3 py-2 text-right font-bold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                                  {gap > 0 ? '+' : ''}{gap}分
+                                </td>
+                                <td className="px-3 py-2 text-right font-bold text-purple-700">
+                                  {config.count ? `${totalCount}件` : '-'}
+                                </td>
+                                <td className="px-3 py-2 text-right font-bold text-purple-700">
+                                  {config.points ? `${totalPoints}点` : '-'}
+                                </td>
+                                <td className="px-3 py-2 text-right font-bold text-green-700">
+                                  {avgSpeed !== null ? `${avgSpeed}分/件` : '-'}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <div className="space-y-0.5">
+                                    {memberPerfs.map(mp => (
+                                      <div key={mp.memberId} className="flex items-center gap-1 flex-wrap text-[10px]">
+                                        <span className="text-gray-700 font-medium">{mp.name}</span>
+                                        <span className="text-blue-600">{mp.minutes}分</span>
+                                        {config.count && <span className="text-purple-600">{mp.count}件</span>}
+                                        {config.points && <span className="text-purple-600">{mp.points}点</span>}
+                                        {mp.speed !== null && <span className="text-green-600">{mp.speed}分/件</span>}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
                     </div>
                   </div>
 
@@ -1191,25 +1221,43 @@ export default function DailyPage() {
                                         <th className="pb-1 pr-3">業務名</th>
                                         <th className="pb-1 pr-3 text-right">予定</th>
                                         <th className="pb-1 pr-3 text-right">実績</th>
-                                        <th className="pb-1 text-right">差分</th>
+                                        <th className="pb-1 pr-3 text-right">差分</th>
+                                        <th className="pb-1 pr-3 text-right">件数</th>
+                                        <th className="pb-1 pr-3 text-right">点数</th>
+                                        <th className="pb-1 text-right">スピード</th>
                                       </tr>
                                     </thead>
                                     <tbody>
-                                      {mg.taskGaps.map(tg => (
-                                        <tr key={tg.taskName} className="border-t border-indigo-100">
-                                          <td className="py-1 pr-3">
-                                            <div className="flex items-center gap-1">
-                                              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(tg.taskName) }} />
-                                              <span className="text-gray-700">{tg.taskName.replace(/^【[^】]+】/, '')}</span>
-                                            </div>
-                                          </td>
-                                          <td className="py-1 pr-3 text-right text-gray-600">{tg.planned}分</td>
-                                          <td className="py-1 pr-3 text-right text-blue-700 font-bold">{tg.actual}分</td>
-                                          <td className={`py-1 text-right font-bold ${tg.gap > 0 ? 'text-red-500' : tg.gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                                            {tg.gap > 0 ? '+' : ''}{tg.gap}分
-                                          </td>
-                                        </tr>
-                                      ))}
+                                      {mg.taskGaps.map(tg => {
+                                        const perfCfg = TASK_PERF_CONFIG[tg.taskName];
+                                        const memberPerf = perfData[mg.member.id]?.[tg.taskName];
+                                        const speed = memberPerf && memberPerf.count > 0 && tg.actual > 0
+                                          ? Math.round((tg.actual / memberPerf.count) * 10) / 10 : null;
+                                        return (
+                                          <tr key={tg.taskName} className="border-t border-indigo-100">
+                                            <td className="py-1 pr-3">
+                                              <div className="flex items-center gap-1">
+                                                <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(tg.taskName) }} />
+                                                <span className="text-gray-700">{tg.taskName.replace(/^【[^】]+】/, '')}</span>
+                                              </div>
+                                            </td>
+                                            <td className="py-1 pr-3 text-right text-gray-600">{tg.planned}分</td>
+                                            <td className="py-1 pr-3 text-right text-blue-700 font-bold">{tg.actual}分</td>
+                                            <td className={`py-1 pr-3 text-right font-bold ${tg.gap > 0 ? 'text-red-500' : tg.gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
+                                              {tg.gap > 0 ? '+' : ''}{tg.gap}分
+                                            </td>
+                                            <td className="py-1 pr-3 text-right text-purple-700 font-bold">
+                                              {perfCfg?.count && memberPerf ? `${memberPerf.count}件` : '-'}
+                                            </td>
+                                            <td className="py-1 pr-3 text-right text-purple-700 font-bold">
+                                              {perfCfg?.points && memberPerf ? `${memberPerf.points}点` : '-'}
+                                            </td>
+                                            <td className="py-1 text-right text-green-700 font-bold">
+                                              {speed !== null ? `${speed}分/件` : '-'}
+                                            </td>
+                                          </tr>
+                                        );
+                                      })}
                                     </tbody>
                                   </table>
                                 </div>
