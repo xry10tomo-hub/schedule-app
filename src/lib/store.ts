@@ -34,6 +34,35 @@ export const TASK_CATEGORIES = [
   'LINE', '営業', '査定', '販売', '社内', '売却', '補助', '配信', 'タグ', '集計データ更新', 'OL', 'その他',
 ] as const;
 
+// Category-based color mapping
+// Each category has multiple shades so tasks within the same category are distinguishable
+export const CATEGORY_COLORS: Record<string, string[]> = {
+  'LINE':           ['#16a34a', '#22c55e', '#4ade80', '#15803d'],  // 緑系
+  '営業':           ['#ea580c', '#f97316', '#fb923c', '#c2410c'],  // オレンジ系
+  '査定':           ['#1e3a5f', '#93c5fd', '#1d4ed8', '#bfdbfe', '#2563eb', '#dbeafe', '#3b82f6', '#60a5fa'],  // 青系（濃淡交互）
+  '販売':           ['#dc2626', '#ef4444', '#f87171', '#b91c1c', '#fca5a5', '#991b1b', '#f43f5e', '#e11d48', '#fb7185', '#be123c', '#fda4af', '#9f1239', '#e879a4', '#c026d3', '#a855f7', '#d946ef', '#db2777', '#ec4899', '#f472b6', '#be185d', '#a21caf', '#7c3aed', '#6d28d9', '#8b5cf6', '#c084fc', '#a78bfa', '#7e22ce'],  // 赤系 (many shades for many tasks)
+  '社内':           ['#6b7280', '#9ca3af', '#4b5563', '#d1d5db', '#374151', '#a8a29e', '#78716c', '#57534e'],  // グレー系
+  '売却':           ['#7c3aed', '#8b5cf6', '#a78bfa', '#6d28d9'],  // 紫系
+  '補助':           ['#ca8a04', '#eab308', '#facc15', '#a16207'],  // 黄色系
+  '配信':           ['#0d9488', '#14b8a6', '#2dd4bf', '#0f766e'],  // ティール系
+  'タグ':           ['#be185d', '#ec4899', '#f472b6', '#9d174d'],  // ピンク系
+  '集計データ更新':  ['#4338ca', '#6366f1', '#818cf8', '#3730a3', '#a5b4fc', '#312e81'],  // インディゴ系
+  'OL':             ['#0e7490', '#06b6d4', '#22d3ee', '#155e75'],  // シアン系
+  'その他':         ['#78716c', '#a8a29e', '#d6d3d1', '#57534e', '#44403c', '#292524', '#e7e5e4', '#8d8680', '#b8b3ad', '#a3a099', '#c4bfb9'],  // 石系（ウォームグレー）
+};
+
+// Get color for a task name based on its category
+export function getCategoryTaskColor(taskName: string): string {
+  const tasks = getTaskDefinitions();
+  const task = tasks.find(t => t.name === taskName);
+  const category = task?.category || 'その他';
+  const colors = CATEGORY_COLORS[category] || CATEGORY_COLORS['その他'];
+  // Find index of this task within its category
+  const categoryTasks = tasks.filter(t => t.category === category);
+  const idx = categoryTasks.findIndex(t => t.name === taskName);
+  return colors[Math.max(idx, 0) % colors.length];
+}
+
 export const DEFAULT_TASKS: TaskDefinition[] = [
   // LINE
   { id: 'line-1', name: '【LINE】画像査定', category: 'LINE', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 5 },
@@ -63,15 +92,15 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
   { id: 'sell-3', name: '【販売】梱包', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-4', name: '【販売】結果共有', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 5 },
   { id: 'sell-5', name: '【販売】AVE作成', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
-  { id: 'sell-6', name: '【販売】エメパス製品化', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-6', name: '【販売】エメキン製品化', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-7', name: '【販売】在庫管理（卸先・Y出し選定）', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 15 },
   { id: 'sell-8', name: '【販売】差別・鑑定依頼', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-9', name: '【販売】アプレ返却対応', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
-  { id: 'sell-10', name: '【販売】計算書転記', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-10', name: '【販売】計算書読込', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-11', name: '【販売】シッピング', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 15 },
   { id: 'sell-12', name: '【販売】バク成約・上がり', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-13', name: '【販売】高橋買取依頼・上がり', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
-  { id: 'sell-14', name: '【販売】アクヒリ一製品化', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-14', name: '【販売】アクセサリー製品化', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-15', name: '【販売】NJ予約電話', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 5 },
   { id: 'sell-16', name: '【販売】在庫管理（製品登録）', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-17', name: '【販売】タグ付け（オークション）', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 5 },
@@ -137,7 +166,8 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
 
 // ============ Fixed Tasks (固定業務) ============
 // When '固定業務' is selected in monthly calendar, these tasks auto-populate daily
-export const FIXED_TASK_NAMES = [
+// Default list - can be overridden via getFixedTasks()/setFixedTasks() from UI
+export const DEFAULT_FIXED_TASK_NAMES = [
   '【LINE】画像査定',
   '【LINE】LINE整理',
   '【LINE】要対応',
@@ -161,6 +191,57 @@ export const FIXED_TASK_NAMES = [
   '【営業】受け電話',
   '【他】休憩',
 ];
+
+// Backwards-compat: always read from storage when accessed
+export function getFixedTasks(): string[] {
+  return getFromStorage('schedule_fixed_tasks', DEFAULT_FIXED_TASK_NAMES);
+}
+export function setFixedTasks(tasks: string[]) {
+  setToStorage('schedule_fixed_tasks', tasks);
+}
+// Deprecated: use getFixedTasks() - kept for backwards compat where synchronous module-init access is safe
+export const FIXED_TASK_NAMES = DEFAULT_FIXED_TASK_NAMES;
+
+// Default values for fixed tasks (件数/点数/回数 and 1回あたり時間)
+// Used when a fixed task is auto-populated via 月次カレンダー (applied every day the same)
+export type FixedTaskDefault = { plannedCount: number; minutesPerUnit: number };
+export function getFixedTaskDefaults(): Record<string, FixedTaskDefault> {
+  return getFromStorage('schedule_fixed_task_defaults', {});
+}
+export function setFixedTaskDefaults(defaults: Record<string, FixedTaskDefault>) {
+  setToStorage('schedule_fixed_task_defaults', defaults);
+}
+
+// Per-task assignment config (used by daily input + auto-assign)
+// - assignableMemberIds: list of member ids who can do this task
+// - scheduledStart / scheduledEnd: legacy single time range (kept for backwards compat)
+// - scheduledRanges: multiple time ranges (new format)
+export type ScheduledRange = { start: string; end: string };
+export type TaskAssignmentConfig = {
+  assignableMemberIds: string[];
+  scheduledStart: string; // legacy
+  scheduledEnd: string;   // legacy
+  scheduledRanges?: ScheduledRange[]; // multiple time slots
+};
+export function getTaskAssignments(): Record<string, TaskAssignmentConfig> {
+  const raw = getFromStorage<Record<string, TaskAssignmentConfig>>('schedule_task_assignments', {});
+  // Migrate legacy single-range to scheduledRanges array if missing
+  const out: Record<string, TaskAssignmentConfig> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!v.scheduledRanges) {
+      out[k] = {
+        ...v,
+        scheduledRanges: (v.scheduledStart && v.scheduledEnd) ? [{ start: v.scheduledStart, end: v.scheduledEnd }] : [],
+      };
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+export function setTaskAssignments(data: Record<string, TaskAssignmentConfig>) {
+  setToStorage('schedule_task_assignments', data);
+}
 
 // ============ Default Task Resources (1点あたりのリソース) ============
 export const DEFAULT_TASK_RESOURCES: TaskResource[] = [
@@ -206,6 +287,9 @@ export const STORAGE_KEYS = {
   actualTimeline: 'schedule_actual_timeline',
   handovers: 'schedule_handovers',
   actualPerformance: 'schedule_actual_performance',
+  fixedTasks: 'schedule_fixed_tasks',
+  fixedTaskDefaults: 'schedule_fixed_task_defaults',
+  taskAssignments: 'schedule_task_assignments',
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -221,6 +305,9 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.actualTimeline,
   STORAGE_KEYS.handovers,
   STORAGE_KEYS.actualPerformance,
+  STORAGE_KEYS.fixedTasks,
+  STORAGE_KEYS.fixedTaskDefaults,
+  STORAGE_KEYS.taskAssignments,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {
@@ -266,8 +353,52 @@ function debouncedFirestoreSync(key: string, value: unknown) {
   }, 500));
 }
 
+// Undo history stack - captures previous values so Ctrl+Z can restore them
+type UndoEntry = { key: string; prevValue: unknown; timestamp: number };
+const undoStack: UndoEntry[] = [];
+const MAX_UNDO_HISTORY = 50;
+let suppressUndoCapture = false;
+const undoListeners: Set<() => void> = new Set();
+
+export function subscribeToUndo(listener: () => void): () => void {
+  undoListeners.add(listener);
+  return () => undoListeners.delete(listener);
+}
+function notifyUndoListeners() { undoListeners.forEach(l => l()); }
+
+export function getUndoStackSize(): number { return undoStack.length; }
+
+export function performUndo(): boolean {
+  if (undoStack.length === 0) return false;
+  const entry = undoStack.pop();
+  if (!entry) return false;
+  // Prevent capturing this restore as a new undo entry
+  suppressUndoCapture = true;
+  try {
+    setToStorage(entry.key, entry.prevValue);
+  } finally {
+    suppressUndoCapture = false;
+  }
+  // Trigger a dataVersion bump so UI refreshes
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('schedule-data-updated'));
+  }
+  notifyUndoListeners();
+  return true;
+}
+
 function setToStorage<T>(key: string, value: T): void {
   if (typeof window === 'undefined') return;
+  // Capture previous value for undo (only for data keys, not currentUser)
+  if (!suppressUndoCapture && SYNC_KEYS.has(key)) {
+    try {
+      const prev = localStorage.getItem(key);
+      const prevValue = prev ? JSON.parse(prev) : null;
+      undoStack.push({ key, prevValue, timestamp: Date.now() });
+      if (undoStack.length > MAX_UNDO_HISTORY) undoStack.shift();
+      notifyUndoListeners();
+    } catch { /* ignore */ }
+  }
   localStorage.setItem(key, JSON.stringify(value));
   // Sync to Firestore for shared data (debounced)
   if (SYNC_KEYS.has(key)) {

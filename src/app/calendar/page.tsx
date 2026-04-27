@@ -131,7 +131,7 @@ export default function CalendarPage() {
         </div>
 
         {/* Calendar Grid */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100">
           <div className="grid grid-cols-7 border-b">
             {dayNames.map((d, i) => (
               <div key={d} className={`py-2 text-center text-xs font-semibold ${
@@ -189,6 +189,7 @@ function DayCell({
   isCopied: boolean;
 }) {
   const [showForm, setShowForm] = useState(false);
+  const [showAll, setShowAll] = useState(false);
   const [formTask, setFormTask] = useState('');
 
   function handleSubmit() {
@@ -226,7 +227,7 @@ function DayCell({
 
       {/* Schedule chips */}
       <div className="mt-1 space-y-0.5">
-        {schedules.slice(0, 4).map(s => (
+        {(showAll ? schedules : schedules.slice(0, 4)).map(s => (
           <div key={s.id} className={`flex items-center gap-1 text-xs rounded px-1 py-0.5 group/chip ${
             s.taskName === '固定業務' ? 'bg-yellow-100 text-yellow-800 font-bold' : 'bg-green-100 text-green-800'
           }`}>
@@ -235,13 +236,20 @@ function DayCell({
           </div>
         ))}
         {schedules.length > 4 && (
-          <p className="text-xs text-gray-400">+{schedules.length - 4} more</p>
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="text-xs text-blue-500 hover:text-blue-700 hover:underline w-full text-left"
+          >
+            {showAll ? '▲ 閉じる' : `▼ +${schedules.length - 4} more`}
+          </button>
         )}
       </div>
 
-      {/* Add form dropdown */}
+      {/* Add form dropdown - flips upward for days in last rows to avoid being clipped */}
       {showForm && (
-        <div className="absolute z-20 top-full left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-56 space-y-2">
+        <div className={`absolute z-50 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-56 space-y-2 ${
+          day >= 22 ? 'bottom-full mb-1' : 'top-full mt-1'
+        }`}>
           <select value={formTask} onChange={e => setFormTask(e.target.value)} className="w-full text-xs border rounded px-2 py-1.5">
             <option value="">業務名を選択</option>
             <option value="固定業務" className="font-bold">★ 固定業務（一括追加）</option>

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
 import type { DailyTask, Member, ShiftEntry } from '@/lib/types';
 
 // ===== Timeline Constants =====
@@ -16,15 +16,7 @@ const BREAK_WINDOW_START_BLOCK = (11.5 - TIMELINE_START) * BLOCKS_PER_HOUR; // 1
 const BREAK_DURATION_BLOCKS = 4; // 1 hour = 4 blocks
 const BREAK_TASK_NAME = '【他】休憩';
 
-// Task colors (same as daily page)
-const TASK_COLORS = [
-  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
-  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
-  '#e11d48', '#84cc16', '#0ea5e9', '#d946ef', '#fbbf24',
-  '#22c55e', '#a855f7', '#fb7185', '#2dd4bf', '#facc15',
-  '#78716c', '#64748b', '#0d9488', '#db2777', '#ea580c',
-  '#4f46e5', '#059669', '#dc2626', '#7c3aed', '#ca8a04',
-];
+// Use category-based colors (defined in store.ts)
 
 function blockToTime(blockIndex: number): string {
   const totalMinutes = TIMELINE_START * 60 + blockIndex * 15;
@@ -97,38 +89,40 @@ function runAutoAssignAlgorithm(
     }
   });
 
+  // ===== Read taskAssignments (per-task config from 日次業務入力) =====
+  const taskAssignmentsCfg = getTaskAssignments();
+
   // ===== Step 2: Place tasks with scheduled times (実施時間) first =====
-  const scheduledTasksHandled = new Set<string>(); // track task names already placed by scheduled time
+  const scheduledTasksHandled = new Set<string>();
 
   for (const task of tasks) {
     if (task.taskName === BREAK_TASK_NAME) continue;
-    const blocksNeeded = Math.max(1, Math.ceil(task.plannedMinutes / 15));
+    const cfg = taskAssignmentsCfg[task.taskName];
+    if (!cfg) continue;
 
-    // Find members who have scheduledTime(s) for this task
-    const membersWithScheduledTime = activeMembers.filter(m => {
-      const st = (m.scheduledTimeRatings || {})[task.taskName];
-      // Support both old string format and new string[] format
-      if (Array.isArray(st)) return st.length > 0 && m.skills.includes(task.taskName);
-      return st && m.skills.includes(task.taskName);
-    });
+    // Collect all time ranges (new multi-range format + legacy single)
+    const ranges: Array<{ start: string; end: string }> = [];
+    if (Array.isArray(cfg.scheduledRanges) && cfg.scheduledRanges.length > 0) {
+      for (const r of cfg.scheduledRanges) {
+        if (r.start && r.end) ranges.push({ start: r.start, end: r.end });
+      }
+    } else if (cfg.scheduledStart && cfg.scheduledEnd) {
+      ranges.push({ start: cfg.scheduledStart, end: cfg.scheduledEnd });
+    }
+    if (ranges.length === 0) continue;
 
-    for (const member of membersWithScheduledTime) {
-      const rawSt = (member.scheduledTimeRatings || {})[task.taskName];
-      // Normalize to array
-      const timeRanges: string[] = Array.isArray(rawSt) ? rawSt : (typeof rawSt === 'string' && rawSt ? [rawSt] : []);
+    const priorityMembers = (cfg.assignableMemberIds || [])
+      .map(id => activeMembers.find(m => m.id === id))
+      .filter(Boolean) as Member[];
 
-      for (const scheduledTime of timeRanges) {
-        // Parse range format "HH:mm-HH:mm"
-        const parts = scheduledTime.split('-');
-        if (parts.length !== 2) continue;
-
-        const [startH, startM] = parts[0].split(':').map(Number);
-        const [endH, endM] = parts[1].split(':').map(Number);
-        const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
-        const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
-        if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
-
-        // Place blocks within the scheduled time range
+    for (const range of ranges) {
+      const [startH, startM] = range.start.split(':').map(Number);
+      const [endH, endM] = range.end.split(':').map(Number);
+      const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
+      const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
+      if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
+      // Place blocks for assignable members in priority order (selected order)
+      for (const member of priorityMembers) {
         for (let b = startBlock; b < Math.min(endBlock, TOTAL_BLOCKS); b++) {
           if (memberAvailableBlocks[member.id]?.includes(b)) {
             timeline[member.id][String(b)] = task.taskName;
@@ -136,8 +130,8 @@ function runAutoAssignAlgorithm(
           }
         }
       }
-      if (timeRanges.length > 0) scheduledTasksHandled.add(task.taskName);
     }
+    if (priorityMembers.length > 0) scheduledTasksHandled.add(task.taskName);
   }
 
   // ===== Step 3: Prepare remaining assignable tasks =====
@@ -145,34 +139,23 @@ function runAutoAssignAlgorithm(
 
   for (const task of tasks) {
     if (task.taskName === BREAK_TASK_NAME) continue;
-    if (scheduledTasksHandled.has(task.taskName)) continue; // already handled by scheduled time
+    if (scheduledTasksHandled.has(task.taskName)) continue;
 
     const blocksNeeded = Math.max(1, Math.ceil(task.plannedMinutes / 15));
-
-    // Determine global priority for this task (lowest member priority = most important)
-    let minPriority = 99;
-    for (const m of activeMembers) {
-      const p = (m.priorityRatings || {})[task.taskName];
-      if (p != null && p < minPriority) minPriority = p;
-    }
 
     assignableTasks.push({
       taskName: task.taskName,
       blocksNeeded,
       assigneeId: task.assigneeId,
-      priority: minPriority,
+      priority: 0, // priority is encoded in member order, not per-task
     });
   }
 
-  // Sort: pre-assigned tasks first, then by priority (lower = more important), then by blocks needed (larger first)
+  // Sort: pre-assigned tasks first, then by blocks needed (larger first)
   assignableTasks.sort((a, b) => {
-    // Pre-assigned tasks first
     const aAssigned = a.assigneeId ? 0 : 1;
     const bAssigned = b.assigneeId ? 0 : 1;
     if (aAssigned !== bAssigned) return aAssigned - bAssigned;
-    // Then by priority
-    if (a.priority !== b.priority) return a.priority - b.priority;
-    // Then by size (larger first for better packing)
     return b.blocksNeeded - a.blocksNeeded;
   });
 
@@ -181,7 +164,6 @@ function runAutoAssignAlgorithm(
     let remaining = task.blocksNeeded;
 
     if (task.assigneeId) {
-      // Pre-assigned: put on this member's timeline
       const available = memberAvailableBlocks[task.assigneeId] || [];
       const toAssign = Math.min(remaining, available.length);
       for (let i = 0; i < toAssign; i++) {
@@ -193,19 +175,12 @@ function runAutoAssignAlgorithm(
 
     if (remaining <= 0) continue;
 
-    // Find capable members sorted by priority for this task
-    const capableMembers = activeMembers
-      .filter(m => {
-        if (m.id === task.assigneeId) return false; // already tried
-        return m.skills.includes(task.taskName);
-      })
-      .sort((a, b) => {
-        const pa = (a.priorityRatings || {})[task.taskName] ?? 99;
-        const pb = (b.priorityRatings || {})[task.taskName] ?? 99;
-        if (pa !== pb) return pa - pb;
-        // Tie-break: more available time first
-        return (memberAvailableBlocks[b.id]?.length || 0) - (memberAvailableBlocks[a.id]?.length || 0);
-      });
+    // Find capable members from taskAssignments, ordered by selection (= priority)
+    const cfg = taskAssignmentsCfg[task.taskName];
+    const assignableIds = cfg?.assignableMemberIds || [];
+    const capableMembers = assignableIds
+      .map(id => activeMembers.find(m => m.id === id))
+      .filter((m): m is Member => !!m && m.id !== task.assigneeId);
 
     for (const member of capableMembers) {
       if (remaining <= 0) break;
@@ -277,8 +252,7 @@ export default function AutoAssignPage() {
   }, [tasks, previewTimeline]);
 
   function getTaskColor(taskName: string): string {
-    const idx = allTaskNames.indexOf(taskName);
-    return idx >= 0 ? TASK_COLORS[idx % TASK_COLORS.length] : '#9ca3af';
+    return getCategoryTaskColor(taskName);
   }
 
   // Run auto-assign
@@ -381,7 +355,7 @@ export default function AutoAssignPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">AI自動割振</h1>
             <p className="text-sm text-gray-500 mt-1">
-              メンバーのスキル・優先順位・出勤状況から、1日のタイムスケジュールを自動生成します
+              日次業務入力画面の予定入力（対応可能メンバー・実施時間）から、1日のタイムスケジュールを自動生成します
             </p>
           </div>
           <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{date}</span>
@@ -429,72 +403,62 @@ export default function AutoAssignPage() {
                 <thead className="bg-gray-50">
                   <tr className="text-left text-gray-500">
                     <th className="px-3 py-2 font-medium">業務名</th>
+                    <th className="px-3 py-2 font-medium">必要件数</th>
+                    <th className="px-3 py-2 font-medium">1回あたり時間</th>
                     <th className="px-3 py-2 font-medium">必要時間</th>
-                    <th className="px-3 py-2 font-medium">担当者</th>
-                    <th className="px-3 py-2 font-medium">対応可能メンバー</th>
-                    <th className="px-3 py-2 font-medium">最高優先</th>
+                    <th className="px-3 py-2 font-medium">対応可能メンバー（選択順=優先度）</th>
                     <th className="px-3 py-2 font-medium">実施時間</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {tasks.filter(t => t.taskName !== BREAK_TASK_NAME).map(t => {
-                    const assignee = members.find(m => m.id === t.assigneeId);
-                    const capableMembers = activeMembers.filter(m => m.skills.includes(t.taskName));
-                    const bestPriority = capableMembers.reduce((min, m) => {
-                      const p = (m.priorityRatings || {})[t.taskName];
-                      return p != null && p < min ? p : min;
-                    }, 99);
-                    return (
-                      <tr key={t.id} className="border-b border-gray-50">
-                        <td className="px-3 py-2">
-                          <div className="flex items-center gap-2">
-                            <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
-                            <span className="text-xs">{t.taskName}</span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 text-xs">{t.plannedMinutes}分</td>
-                        <td className="px-3 py-2 text-xs">{assignee?.name || <span className="text-gray-400">未割当</span>}</td>
-                        <td className="px-3 py-2">
-                          <div className="flex flex-wrap gap-1">
-                            {capableMembers.length > 0 ? capableMembers.map(m => {
-                              const p = (m.priorityRatings || {})[t.taskName];
-                              return (
-                                <span key={m.id} className="text-[10px] px-1.5 py-0.5 bg-green-50 text-green-700 rounded">
-                                  {m.name}{p != null ? `(P${p})` : ''}
+                  {(() => {
+                    const cfgAll = getTaskAssignments();
+                    return tasks.filter(t => t.taskName !== BREAK_TASK_NAME).map(t => {
+                      const cfg = cfgAll[t.taskName] || { assignableMemberIds: [], scheduledStart: '', scheduledEnd: '' };
+                      const assignableMembers = (cfg.assignableMemberIds || [])
+                        .map(id => members.find(m => m.id === id))
+                        .filter((m): m is Member => !!m);
+                      return (
+                        <tr key={t.id} className="border-b border-gray-50">
+                          <td className="px-3 py-2">
+                            <div className="flex items-center gap-2">
+                              <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
+                              <span className="text-xs">{t.taskName}</span>
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-xs">{t.plannedCount}</td>
+                          <td className="px-3 py-2 text-xs">{t.minutesPerUnit || 0}分</td>
+                          <td className="px-3 py-2 text-xs font-bold text-orange-700">{t.plannedMinutes}分</td>
+                          <td className="px-3 py-2">
+                            <div className="flex flex-wrap gap-1">
+                              {assignableMembers.length > 0 ? assignableMembers.map((m, idx) => (
+                                <span key={m.id} className={`text-[10px] px-1.5 py-0.5 rounded ${idx === 0 ? 'bg-purple-100 text-purple-800 font-bold' : 'bg-green-50 text-green-700'}`}>
+                                  {idx + 1}. {m.name}
                                 </span>
+                              )) : <span className="text-[10px] text-red-400">未設定（日次業務入力で設定してください）</span>}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2">
+                            {(() => {
+                              const ranges = (cfg.scheduledRanges && cfg.scheduledRanges.length > 0)
+                                ? cfg.scheduledRanges
+                                : (cfg.scheduledStart && cfg.scheduledEnd ? [{ start: cfg.scheduledStart, end: cfg.scheduledEnd }] : []);
+                              if (ranges.length === 0) return <span className="text-xs text-gray-400">-</span>;
+                              return (
+                                <div className="flex flex-wrap gap-1">
+                                  {ranges.map((r, ri) => (
+                                    <span key={ri} className="text-[10px] px-1.5 py-0.5 bg-orange-50 text-orange-700 rounded font-bold">
+                                      {r.start}〜{r.end}
+                                    </span>
+                                  ))}
+                                </div>
                               );
-                            }) : <span className="text-[10px] text-red-400">対応可能メンバーなし</span>}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2">
-                          {bestPriority < 99 ? (
-                            <span className={`text-xs font-bold ${bestPriority === 1 ? 'text-purple-700' : 'text-gray-600'}`}>P{bestPriority}</span>
-                          ) : (
-                            <span className="text-xs text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {(() => {
-                            const scheduledEntries: { name: string; times: string[] }[] = [];
-                            capableMembers.forEach(m => {
-                              const raw = (m.scheduledTimeRatings || {})[t.taskName];
-                              const times: string[] = Array.isArray(raw) ? raw : (typeof raw === 'string' && raw ? [raw] : []);
-                              if (times.length > 0) scheduledEntries.push({ name: m.name, times });
-                            });
-                            return scheduledEntries.length > 0 ? (
-                              <div className="flex flex-wrap gap-1">
-                                {scheduledEntries.map(se => se.times.map((time, i) => (
-                                  <span key={`${se.name}-${i}`} className="text-[10px] px-1.5 py-0.5 bg-orange-50 text-orange-700 rounded">
-                                    {se.name}@{time.replace('-', '～')}
-                                  </span>
-                                )))}
-                              </div>
-                            ) : <span className="text-xs text-gray-400">-</span>;
-                          })()}
-                        </td>
-                      </tr>
-                    );
-                  })}
+                            })()}
+                          </td>
+                        </tr>
+                      );
+                    });
+                  })()}
                 </tbody>
               </table>
             </div>
@@ -702,17 +666,17 @@ export default function AutoAssignPage() {
             <div className="space-y-2">
               <p><span className="font-bold text-green-700">1.</span> シフト登録済みメンバーの出勤時間を確認</p>
               <p><span className="font-bold text-green-700">2.</span> 全員に休憩を割当（11:30〜13:30の間に1時間）</p>
-              <p><span className="font-bold text-green-700">3.</span> 実施時間が設定されたタスクを指定時間に固定配置</p>
-              <p><span className="font-bold text-green-700">4.</span> 担当者が指定されたタスクを優先的に配置</p>
+              <p><span className="font-bold text-green-700">3.</span> 日次業務入力で「実施時間」が設定されたタスクを指定時間に固定配置</p>
+              <p><span className="font-bold text-green-700">4.</span> 「対応可能メンバー」の選択順を優先順位として割振</p>
             </div>
             <div className="space-y-2">
-              <p><span className="font-bold text-green-700">5.</span> 未割当タスクを優先順位に基づきメンバーに配分</p>
-              <p><span className="font-bold text-green-700">6.</span> 同じ優先順位の場合、空き時間が多いメンバーに割当</p>
-              <p><span className="font-bold text-green-700">7.</span> 対応可能メンバーがいない場合は最も空きのあるメンバーに割当</p>
+              <p><span className="font-bold text-green-700">5.</span> 各タスクの必要時間（必要件数 × 1回あたり時間）に応じて割当</p>
+              <p><span className="font-bold text-green-700">6.</span> 同じ優先順位（同列）の場合、空き時間が多いメンバーに割当</p>
+              <p><span className="font-bold text-green-700">7.</span> 対応可能メンバーがいない/空きがない場合は割当不可として残ります</p>
             </div>
           </div>
           <div className="mt-3 p-3 bg-yellow-50 rounded-lg text-xs text-yellow-700">
-            <strong>ヒント：</strong>精度を上げるには「業務及びメンバー管理」で各メンバーの対応可能業務・時間・優先順位を設定してください。
+            <strong>ヒント：</strong>精度を上げるには<strong>「日次業務入力」画面の予定入力</strong>で各業務の<strong>対応可能メンバー</strong>（選択順 = 優先順位）と<strong>実施時間</strong>を設定してください。
           </div>
         </div>
       </div>

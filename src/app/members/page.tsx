@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getMembers, setMembers, getTaskDefinitions, DEFAULT_MEMBERS, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
+import { useAppContext, getMembers, setMembers, getTaskDefinitions, getFixedTasks, setFixedTasks, getFixedTaskDefaults, setFixedTaskDefaults, DEFAULT_MEMBERS, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
+import type { FixedTaskDefault } from '@/lib/store';
 import type { Member, TaskDefinition } from '@/lib/types';
 
 export default function MembersPage() {
@@ -476,7 +477,158 @@ export default function MembersPage() {
             )}
           </div>
         </div>
+
+        {/* ===== Fixed Tasks Management ===== */}
+        <FixedTasksManager taskDefs={taskDefs} />
       </div>
     </DashboardLayout>
+  );
+}
+
+// Component for managing fixed tasks (★固定業務)
+function FixedTasksManager({ taskDefs }: { taskDefs: TaskDefinition[] }) {
+  const { dataVersion } = useAppContext();
+  const [fixedTasks, setFixedTasksState] = useState<string[]>([]);
+  const [defaults, setDefaultsState] = useState<Record<string, FixedTaskDefault>>({});
+  const [addSearchQuery, setAddSearchQuery] = useState('');
+
+  useEffect(() => {
+    setFixedTasksState(getFixedTasks());
+    setDefaultsState(getFixedTaskDefaults());
+  }, [dataVersion]);
+
+  function handleToggle(taskName: string) {
+    const next = fixedTasks.includes(taskName)
+      ? fixedTasks.filter(n => n !== taskName)
+      : [...fixedTasks, taskName];
+    setFixedTasksState(next);
+    setFixedTasks(next);
+    // Initialize default for newly added task
+    if (!fixedTasks.includes(taskName) && !defaults[taskName]) {
+      const def = taskDefs.find(t => t.name === taskName);
+      const newDefaults = { ...defaults, [taskName]: { plannedCount: 1, minutesPerUnit: def?.estimatedMinutesPerUnit || 0 } };
+      setDefaultsState(newDefaults);
+      setFixedTaskDefaults(newDefaults);
+    }
+  }
+
+  function handleRemove(taskName: string) {
+    const next = fixedTasks.filter(n => n !== taskName);
+    setFixedTasksState(next);
+    setFixedTasks(next);
+  }
+
+  function handleUpdateDefault(taskName: string, field: keyof FixedTaskDefault, value: number) {
+    const existing = defaults[taskName] || { plannedCount: 1, minutesPerUnit: 0 };
+    const updated = { ...defaults, [taskName]: { ...existing, [field]: value } };
+    setDefaultsState(updated);
+    setFixedTaskDefaults(updated);
+  }
+
+  const q = addSearchQuery.toLowerCase();
+  const availableTasks = taskDefs.filter(t =>
+    !fixedTasks.includes(t.name) &&
+    (!q || t.name.toLowerCase().includes(q) || t.category.toLowerCase().includes(q))
+  );
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border-2 border-amber-200 p-6">
+      <div className="flex items-center gap-2 mb-3">
+        <span className="text-xl">★</span>
+        <h3 className="text-lg font-bold text-gray-800">固定業務の設定</h3>
+      </div>
+      <p className="text-xs text-gray-500 mb-4">
+        月次カレンダーで「★固定業務」を選択した日に、ここで設定した業務が自動で日次タスクに反映されます。
+        件数・1回あたりの時間(分)は毎日同じ値で自動適用されます。
+      </p>
+
+      {/* Current fixed tasks with default values */}
+      <div className="mb-4">
+        <h4 className="text-xs font-semibold text-gray-700 mb-2">現在の固定業務（{fixedTasks.length}件）</h4>
+        {fixedTasks.length === 0 ? (
+          <p className="text-xs text-gray-400 py-2">固定業務が設定されていません</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-gray-500 bg-amber-50/50">
+                  <th className="px-2 py-2 font-semibold">業務名</th>
+                  <th className="px-2 py-2 font-semibold text-right w-28">必要件数/点数</th>
+                  <th className="px-2 py-2 font-semibold text-right w-28">1回あたり時間(分)</th>
+                  <th className="px-2 py-2 font-semibold text-right w-20">必要時間</th>
+                  <th className="px-2 py-2 w-10"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {fixedTasks.map(name => {
+                  const d = defaults[name] || { plannedCount: 1, minutesPerUnit: 0 };
+                  const totalMinutes = d.plannedCount * d.minutesPerUnit;
+                  return (
+                    <tr key={name} className="border-t border-amber-100">
+                      <td className="px-2 py-2 font-medium text-amber-800">{name}</td>
+                      <td className="px-2 py-2 text-right">
+                        <input
+                          type="number" min={0} value={d.plannedCount}
+                          onChange={e => handleUpdateDefault(name, 'plannedCount', Number(e.target.value))}
+                          className="w-20 border rounded px-2 py-1 text-xs text-right"
+                        />
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        <input
+                          type="number" min={0} value={d.minutesPerUnit}
+                          onChange={e => handleUpdateDefault(name, 'minutesPerUnit', Number(e.target.value))}
+                          className="w-20 border rounded px-2 py-1 text-xs text-right"
+                        />
+                      </td>
+                      <td className="px-2 py-2 text-right text-orange-700 font-bold">{totalMinutes}分</td>
+                      <td className="px-2 py-2 text-center">
+                        <button onClick={() => handleRemove(name)} className="text-red-400 hover:text-red-600 text-xs">✕</button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Add new fixed task */}
+      <div className="border-t border-gray-100 pt-4">
+        <h4 className="text-xs font-semibold text-gray-700 mb-2">固定業務を追加</h4>
+        <input
+          type="text"
+          placeholder="業務名で検索..."
+          value={addSearchQuery}
+          onChange={e => setAddSearchQuery(e.target.value)}
+          className="w-full sm:w-80 border rounded-lg px-3 py-1.5 text-xs mb-3"
+        />
+        <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-lg">
+          {TASK_CATEGORIES.map(cat => {
+            const catTasks = availableTasks.filter(t => t.category === cat);
+            if (catTasks.length === 0) return null;
+            return (
+              <div key={cat}>
+                <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider bg-gray-50 text-gray-600 sticky top-0">
+                  {cat}
+                </div>
+                {catTasks.map(t => (
+                  <button
+                    key={t.id}
+                    onClick={() => handleToggle(t.name)}
+                    className="w-full text-left px-3 py-1.5 text-xs hover:bg-amber-50/50 border-b border-gray-50"
+                  >
+                    + {t.name}
+                  </button>
+                ))}
+              </div>
+            );
+          })}
+          {availableTasks.length === 0 && (
+            <p className="text-xs text-gray-400 text-center py-4">追加可能な業務がありません</p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

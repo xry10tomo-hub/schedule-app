@@ -64,7 +64,8 @@ export default function HandoverPage() {
       dateItems.push(item);
       map.set(item.targetDate, dateItems);
     }
-    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+    // Newest date first (descending)
+    return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
   }, [allItems]);
 
   function applyToMonthly(item: HandoverRequest) {
@@ -231,49 +232,234 @@ export default function HandoverPage() {
                 共有された引き継ぎはありません。「新規共有」から作成してください。
               </div>
             ) : (
-              itemsByDate.map(([date, dateItems]) => (
-                <div key={date} className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-                  <div className="px-5 py-3 bg-blue-50 border-b border-blue-100">
-                    <h3 className="text-sm font-bold text-blue-700">📅 {formatDate(date)}（{date}）</h3>
-                  </div>
-                  <div className="divide-y divide-gray-50">
-                    {dateItems.map(item => {
-                      const applicant = getMemberById(item.applicantId);
-                      const isOwn = item.applicantId === currentUserId;
-                      return (
-                        <div key={item.id} className={`px-5 py-4 ${isOwn ? 'bg-green-50/30' : ''}`}>
-                          <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
-                            <div className="flex-1 space-y-1">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">共有済</span>
-                                <span className="text-sm font-bold text-gray-800">{item.taskName}</span>
-                                <span className="text-xs text-gray-500">by {applicant?.name || item.applicantId}</span>
-                                {isOwn && <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded">自分</span>}
-                              </div>
-                              {item.reason && (
-                                <p className="text-xs text-gray-600">💬 理由: {item.reason}</p>
-                              )}
-                              {item.detail && (
-                                <p className="text-xs text-gray-600 whitespace-pre-wrap bg-gray-50 rounded-lg px-3 py-2 mt-1">📝 {item.detail}</p>
-                              )}
-                              <p className="text-[10px] text-gray-400">
-                                共有日時: {new Date(item.createdAt).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                              </p>
-                            </div>
-                            {isOwn && (
-                              <button onClick={() => handleDelete(item.id)} className="text-red-400 hover:text-red-600 text-xs flex-shrink-0">削除</button>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ))
+              itemsByDate.map(([date, dateItems]) => {
+                const isPast = date < getToday();
+                return (
+                <HandoverDateGroup
+                  key={date}
+                  date={date}
+                  dateItems={dateItems}
+                  isPast={isPast}
+                  formatDate={formatDate}
+                  currentUserId={currentUserId}
+                  taskDefs={taskDefs}
+                  tasksByCategory={tasksByCategory}
+                  onReload={reload}
+                />
+                );
+              })
             )}
           </div>
         )}
+
       </div>
     </DashboardLayout>
+  );
+}
+
+// Date group with collapse toggle for past dates
+function HandoverDateGroup({
+  date,
+  dateItems,
+  isPast,
+  formatDate,
+  currentUserId,
+  taskDefs,
+  tasksByCategory,
+  onReload,
+}: {
+  date: string;
+  dateItems: HandoverRequest[];
+  isPast: boolean;
+  formatDate: (d: string) => string;
+  currentUserId: string;
+  taskDefs: TaskDefinition[];
+  tasksByCategory: Record<string, TaskDefinition[]>;
+  onReload: () => void;
+}) {
+  const [expanded, setExpanded] = useState(!isPast); // today/future auto-expanded, past collapsed
+  return (
+    <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${isPast ? 'border-gray-200' : 'border-gray-100'}`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className={`w-full px-5 py-3 flex items-center justify-between hover:bg-opacity-80 transition-colors ${
+          isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-blue-50 border-b border-blue-100'
+        }`}
+      >
+        <div className="flex items-center gap-3">
+          <span className={`text-xs ${expanded ? '' : 'rotate-[-90deg]'} transition-transform`}>▼</span>
+          <h3 className={`text-sm font-bold ${isPast ? 'text-gray-600' : 'text-blue-700'}`}>
+            📅 {formatDate(date)}（{date}）
+          </h3>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full ${isPast ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700'}`}>
+            {dateItems.length}件
+          </span>
+          {isPast && <span className="text-[10px] text-gray-400">過去</span>}
+        </div>
+      </button>
+      {expanded && (
+        <div className="divide-y divide-gray-50">
+          {dateItems.map(item => (
+            <HandoverItemRow
+              key={item.id}
+              item={item}
+              currentUserId={currentUserId}
+              taskDefs={taskDefs}
+              tasksByCategory={tasksByCategory}
+              onReload={onReload}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Row component with inline edit/delete/complete
+function HandoverItemRow({
+  item,
+  currentUserId,
+  taskDefs,
+  tasksByCategory,
+  onReload,
+}: {
+  item: HandoverRequest;
+  currentUserId: string;
+  taskDefs: TaskDefinition[];
+  tasksByCategory: Record<string, TaskDefinition[]>;
+  onReload: () => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editTask, setEditTask] = useState(item.taskName);
+  const [editDate, setEditDate] = useState(item.targetDate);
+  const [editReason, setEditReason] = useState(item.reason);
+  const [editDetail, setEditDetail] = useState(item.detail);
+
+  const applicant = getMemberById(item.applicantId);
+  const isOwn = item.applicantId === currentUserId;
+  const isCompleted = !!item.completed;
+
+  function handleSave() {
+    if (!editTask || !editDate) {
+      alert('業務と対象日を入力してください');
+      return;
+    }
+    const all = getHandovers().map(h => h.id === item.id ? {
+      ...h,
+      taskName: editTask,
+      targetDate: editDate,
+      reason: editReason,
+      detail: editDetail,
+    } : h);
+    setHandovers(all);
+    setIsEditing(false);
+    onReload();
+  }
+
+  function handleDelete() {
+    if (!confirm('この共有を削除しますか？')) return;
+    const all = getHandovers().filter(h => h.id !== item.id);
+    setHandovers(all);
+    onReload();
+  }
+
+  function handleToggleComplete() {
+    const all = getHandovers().map(h => h.id === item.id ? {
+      ...h,
+      completed: !h.completed,
+      completedAt: !h.completed ? Date.now() : 0,
+      completedBy: !h.completed ? currentUserId : '',
+    } : h);
+    setHandovers(all);
+    onReload();
+  }
+
+  // Suppress unused var (taskDefs reserved for future use)
+  void taskDefs;
+
+  if (isEditing) {
+    return (
+      <div className="px-5 py-4 bg-yellow-50/50">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">対象日</label>
+            <input type="date" value={editDate} min={getToday()}
+              onChange={e => setEditDate(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">業務名</label>
+            <select value={editTask} onChange={e => setEditTask(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs">
+              {TASK_CATEGORIES.map(cat => {
+                const catTasks = tasksByCategory[cat] || [];
+                if (catTasks.length === 0) return null;
+                return (
+                  <optgroup key={cat} label={cat}>
+                    {catTasks.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  </optgroup>
+                );
+              })}
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">理由</label>
+            <input type="text" value={editReason} onChange={e => setEditReason(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">詳細</label>
+            <textarea value={editDetail} onChange={e => setEditDetail(e.target.value)}
+              rows={3} className="w-full border rounded px-2 py-1 text-xs resize-y" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 mt-2">
+          <button onClick={() => setIsEditing(false)} className="px-3 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+          <button onClick={handleSave} className="px-4 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded">保存</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`px-5 py-4 ${isCompleted ? 'bg-gray-50 opacity-60' : isOwn ? 'bg-green-50/30' : ''}`}>
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
+        <div className="flex-1 space-y-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <input
+              type="checkbox"
+              checked={isCompleted}
+              onChange={handleToggleComplete}
+              className="w-4 h-4 accent-green-600 cursor-pointer"
+              title="完了チェック"
+            />
+            {isCompleted ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-200 text-gray-600">完了</span>
+            ) : (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">共有済</span>
+            )}
+            <span className={`text-sm font-bold text-gray-800 ${isCompleted ? 'line-through' : ''}`}>{item.taskName}</span>
+            <span className="text-xs text-gray-500">by {applicant?.name || item.applicantId}</span>
+            {isOwn && <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded">自分</span>}
+          </div>
+          {item.reason && (
+            <p className={`text-xs text-gray-600 ${isCompleted ? 'line-through' : ''}`}>💬 理由: {item.reason}</p>
+          )}
+          {item.detail && (
+            <p className={`text-xs text-gray-600 whitespace-pre-wrap bg-gray-50 rounded-lg px-3 py-2 mt-1 ${isCompleted ? 'line-through' : ''}`}>📝 {item.detail}</p>
+          )}
+          <p className="text-[10px] text-gray-400">
+            共有日時: {new Date(item.createdAt).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            {isCompleted && item.completedAt ? ` / 完了: ${new Date(item.completedAt).toLocaleString('ja-JP', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}` : ''}
+          </p>
+        </div>
+        {isOwn && !isCompleted && (
+          <div className="flex gap-2 flex-shrink-0">
+            <button onClick={() => setIsEditing(true)} className="text-blue-400 hover:text-blue-600 text-xs">編集</button>
+            <button onClick={handleDelete} className="text-red-400 hover:text-red-600 text-xs">削除</button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

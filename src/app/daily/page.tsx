@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, TASK_CATEGORIES, FIXED_TASK_NAMES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, getCategoryTaskColor, CATEGORY_COLORS, TASK_CATEGORIES, getFixedTasks, getFixedTaskDefaults, getTaskAssignments, setTaskAssignments, DEFAULT_TASKS } from '@/lib/store';
+import type { TaskAssignmentConfig } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
 
@@ -23,15 +24,7 @@ const TIMELINE_END = 22; // 22:00
 const BLOCKS_PER_HOUR = 4; // 15-min blocks
 const TOTAL_BLOCKS = (TIMELINE_END - TIMELINE_START) * BLOCKS_PER_HOUR; // 56
 
-// Color palette for tasks
-const TASK_COLORS = [
-  '#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6',
-  '#ec4899', '#06b6d4', '#f97316', '#6366f1', '#14b8a6',
-  '#e11d48', '#84cc16', '#0ea5e9', '#d946ef', '#fbbf24',
-  '#22c55e', '#a855f7', '#fb7185', '#2dd4bf', '#facc15',
-  '#78716c', '#64748b', '#0d9488', '#db2777', '#ea580c',
-  '#4f46e5', '#059669', '#dc2626', '#7c3aed', '#ca8a04',
-];
+// Use category-based colors (defined in store.ts)
 
 function blockToTime(blockIndex: number): string {
   const totalMinutes = TIMELINE_START * 60 + blockIndex * 15;
@@ -66,6 +59,14 @@ export default function DailyPage() {
 
   // Performance data state (per-member, per-task: count/points)
   const [performanceData, setPerformanceDataState] = useState<Record<string, Record<string, ActualPerformanceEntry>>>({});
+  const [taskAssignments, setTaskAssignmentsState] = useState<Record<string, TaskAssignmentConfig>>({});
+  const [openMemberPicker, setOpenMemberPicker] = useState<string | null>(null); // taskId being edited
+  const memberPickerRef = useRef<HTMLDivElement>(null);
+
+  // Task search state for timeline paint selector
+  const [taskSearchQuery, setTaskSearchQuery] = useState('');
+  const [showTaskSearchDropdown, setShowTaskSearchDropdown] = useState(false);
+  const taskSearchRef = useRef<HTMLDivElement>(null);
 
   // Form state
   const [formCategory, setFormCategory] = useState('');
@@ -95,8 +96,7 @@ export default function DailyPage() {
   }, [tasks, timelineData, actualTimelineData]);
 
   function getTaskColor(taskName: string): string {
-    const idx = uniqueTaskNames.indexOf(taskName);
-    return idx >= 0 ? TASK_COLORS[idx % TASK_COLORS.length] : '#9ca3af';
+    return getCategoryTaskColor(taskName);
   }
 
   const syncMonthlyTasks = useCallback(() => {
@@ -108,11 +108,14 @@ export default function DailyPage() {
     let added = false;
     const newTasks = [...existingDaily];
 
+    const fixedDefaults = getFixedTaskDefaults();
+    const fixedTaskSet = new Set(getFixedTasks());
+
     // Monthly schedule tasks (固定業務 expansion)
     const taskNamesToAdd: { name: string; source: string }[] = [];
     for (const ms of monthlySchedules) {
       if (ms.taskName === '固定業務') {
-        FIXED_TASK_NAMES.forEach(n => taskNamesToAdd.push({ name: n, source: '月次予定から自動反映' }));
+        getFixedTasks().forEach(n => taskNamesToAdd.push({ name: n, source: '月次予定から自動反映' }));
       } else {
         taskNamesToAdd.push({ name: ms.taskName, source: '月次予定から自動反映' });
       }
@@ -132,15 +135,18 @@ export default function DailyPage() {
       const alreadyExists = dailyForDate.some(t => t.taskName === taskName && t.comment === source);
       if (!alreadyExists) {
         const def = DEFAULT_TASKS.find(d => d.name === taskName);
-        const minutesPerUnit = def?.estimatedMinutesPerUnit || 0;
+        // If this is a fixed task with defaults configured, use them (same every day)
+        const fixedDef = fixedTaskSet.has(taskName) ? fixedDefaults[taskName] : undefined;
+        const plannedCount = fixedDef?.plannedCount ?? 1;
+        const minutesPerUnit = fixedDef?.minutesPerUnit ?? (def?.estimatedMinutesPerUnit || 0);
         newTasks.push({
           id: generateId(),
           date: selectedDate,
           taskName,
           assigneeId: '',
-          plannedCount: 1,
+          plannedCount,
           minutesPerUnit,
-          plannedMinutes: minutesPerUnit,
+          plannedMinutes: plannedCount * minutesPerUnit,
           plannedPoints: 0,
           actualCount: 0,
           actualPoints: 0,
@@ -160,14 +166,27 @@ export default function DailyPage() {
     return newTasks.filter(t => t.date === selectedDate);
   }, [selectedDate]);
 
-  // Sort tasks: 引き継ぎ first, then 【LINE】画像査定, then 【査定】計算書作成, then others
+  // Sort tasks: 引き継ぎ first, then fixed priority tasks, then others
+  const PRIORITY_TASK_ORDER = [
+    '【LINE】画像査定',
+    '【査定】計算書作成',
+    '【査定】計算書提出',
+    '【補助】郵送物開封',
+    '【営業】商材追い電話',
+    '【補助】返送',
+    '【査定】計算書（下書き）',
+  ];
   function sortTasks(taskList: DailyTask[]): DailyTask[] {
     return [...taskList].sort((a, b) => {
+      // Rule 1: 引き継ぎ業務は絶対最上位 (handover tasks always at the very top)
+      const aIsHandover = a.comment === '引き継ぎ';
+      const bIsHandover = b.comment === '引き継ぎ';
+      if (aIsHandover && !bIsHandover) return -1;
+      if (!aIsHandover && bIsHandover) return 1;
+      // Rule 2: 指定優先業務の順序 (then priority task order)
       const order = (t: DailyTask) => {
-        if (t.comment === '引き継ぎ') return 0;
-        if (t.taskName === '【LINE】画像査定') return 1;
-        if (t.taskName === '【査定】計算書作成') return 2;
-        return 3;
+        const idx = PRIORITY_TASK_ORDER.indexOf(t.taskName);
+        return idx >= 0 ? idx : 999;
       };
       return order(a) - order(b);
     });
@@ -180,6 +199,7 @@ export default function DailyPage() {
     setTimelineDataState(getTimelineForDate(selectedDate));
     setActualTimelineDataState(getActualTimelineForDate(selectedDate));
     setPerformanceDataState(getActualPerformanceForDate(selectedDate));
+    setTaskAssignmentsState(getTaskAssignments());
   }, [syncMonthlyTasks, selectedDate, dataVersion]);
 
 
@@ -188,10 +208,14 @@ export default function DailyPage() {
   // Shifts for selected date
   const shiftsForDate = getShifts().filter(s => s.date === selectedDate);
 
-  // Members with shifts (active on this date)
+  // Members active on this date: those with shifts OR who have timeline/actual data
   const activeMembers = useMemo(() => {
-    return members.filter(m => shiftsForDate.some(s => s.memberId === m.id));
-  }, [members, shiftsForDate]);
+    return members.filter(m =>
+      shiftsForDate.some(s => s.memberId === m.id) ||
+      timelineData[m.id] ||
+      actualTimelineData[m.id]
+    );
+  }, [members, shiftsForDate, timelineData, actualTimelineData]);
 
   // ===== Timeline handlers =====
   function handleBlockMouseDown(memberId: string, blockIndex: number) {
@@ -214,7 +238,8 @@ export default function DailyPage() {
   function handleBlockMouseEnter(memberId: string, blockIndex: number) {
     if (!isDragging || !selectedPaintTask) return;
     const shift = shiftsForDate.find(s => s.memberId === memberId);
-    if (!isBlockInShift(blockIndex, shift)) return;
+    // Allow dragging even without shift
+    if (shift && !isBlockInShift(blockIndex, shift)) return;
 
     const memberBlocks = { ...(timelineData[memberId] || {}) };
     const key = String(blockIndex);
@@ -237,6 +262,36 @@ export default function DailyPage() {
     return () => window.removeEventListener('mouseup', handleMouseUp);
   }, []);
 
+  // Close task search dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (taskSearchRef.current && !taskSearchRef.current.contains(e.target as Node)) {
+        setShowTaskSearchDropdown(false);
+      }
+      if (memberPickerRef.current && !memberPickerRef.current.contains(e.target as Node)) {
+        setOpenMemberPicker(null);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Filtered tasks for search
+  const filteredSearchTasks = useMemo(() => {
+    const q = taskSearchQuery.toLowerCase();
+    return taskDefs.filter(t => !q || t.name.toLowerCase().includes(q) || t.category.toLowerCase().includes(q));
+  }, [taskDefs, taskSearchQuery]);
+
+  // Category color for dropdown styling
+  function getCategoryBgColor(category: string): string {
+    const colors = CATEGORY_COLORS[category];
+    return colors ? colors[0] + '20' : '#9ca3af20'; // 12% opacity
+  }
+  function getCategoryTextColor(category: string): string {
+    const colors = CATEGORY_COLORS[category];
+    return colors ? colors[0] : '#9ca3af';
+  }
+
   // ===== Per-member timeline summary =====
   const memberTimelineSummary = useMemo(() => {
     return activeMembers.map(m => {
@@ -256,6 +311,12 @@ export default function DailyPage() {
       const actualMinutes = actualBlockCount * 15;
       const actualCount = actualBlockCount; // block count as proxy
 
+      // Actual task breakdown per member
+      const actualTaskBreakdown: Record<string, number> = {};
+      Object.values(actualBlocks).forEach(taskName => {
+        actualTaskBreakdown[taskName] = (actualTaskBreakdown[taskName] || 0) + 15;
+      });
+
       // Shift info
       const shift = shiftsForDate.find(s => s.memberId === m.id);
       const shiftMinutes = shift ? (() => {
@@ -271,6 +332,7 @@ export default function DailyPage() {
         actualCount,
         shiftMinutes,
         taskBreakdown,
+        actualTaskBreakdown,
         remainingMinutes: shiftMinutes - plannedMinutes,
       };
     });
@@ -335,6 +397,43 @@ export default function DailyPage() {
     setTasksState(all.filter(t => t.date === selectedDate));
   }
 
+  // Get task assignment config (with defaults)
+  function getAssignment(taskName: string): TaskAssignmentConfig {
+    return taskAssignments[taskName] || { assignableMemberIds: [], scheduledStart: '', scheduledEnd: '', scheduledRanges: [] };
+  }
+  // Update assignment config (global, persists across days)
+  function updateAssignment(taskName: string, patch: Partial<TaskAssignmentConfig>) {
+    const current = getAssignment(taskName);
+    const updated = { ...taskAssignments, [taskName]: { ...current, ...patch } };
+    setTaskAssignmentsState(updated);
+    setTaskAssignments(updated);
+  }
+  function toggleMemberForTask(taskName: string, memberId: string) {
+    const current = getAssignment(taskName);
+    const ids = current.assignableMemberIds.includes(memberId)
+      ? current.assignableMemberIds.filter(id => id !== memberId)
+      : [...current.assignableMemberIds, memberId];
+    updateAssignment(taskName, { assignableMemberIds: ids });
+  }
+  // Multiple scheduled time ranges helpers
+  function updateRange(taskName: string, idx: number, field: 'start' | 'end', value: string) {
+    const current = getAssignment(taskName);
+    const ranges = [...(current.scheduledRanges || [])];
+    if (!ranges[idx]) ranges[idx] = { start: '', end: '' };
+    ranges[idx] = { ...ranges[idx], [field]: value };
+    updateAssignment(taskName, { scheduledRanges: ranges });
+  }
+  function addRange(taskName: string) {
+    const current = getAssignment(taskName);
+    const ranges = [...(current.scheduledRanges || []), { start: '', end: '' }];
+    updateAssignment(taskName, { scheduledRanges: ranges });
+  }
+  function removeRange(taskName: string, idx: number) {
+    const current = getAssignment(taskName);
+    const ranges = (current.scheduledRanges || []).filter((_, i) => i !== idx);
+    updateAssignment(taskName, { scheduledRanges: ranges });
+  }
+
   function copyFromPreviousDay() {
     // Get previous day's date
     const prevDate = new Date(selectedDate + 'T00:00:00');
@@ -372,20 +471,79 @@ export default function DailyPage() {
   }
 
   function handleExportCSV() {
-    const data = tasks.map(t => ({
-      日付: t.date,
-      業務名: t.taskName,
-      担当者: getMemberById(t.assigneeId)?.name || '',
-      必要件数: t.plannedCount,
-      '1回あたり時間_分': t.minutesPerUnit || 0,
-      必要時間_分: t.plannedMinutes,
-      実績件数: t.actualCount,
-      実績点数: t.actualPoints,
-      実績時間_分: t.actualMinutes,
-      ステータス: t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '未着手',
-      コメント: t.comment,
-    }));
+    const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
+    const perfAll = getActualPerformanceForDate(selectedDate);
+    const actualByMemberTask = new Map<string, number>(); // key: memberId|taskName → minutes
+    Object.entries(actualTimelineData).forEach(([memberId, blocks]) => {
+      Object.values(blocks).forEach(tn => {
+        const k = `${memberId}|${tn}`;
+        actualByMemberTask.set(k, (actualByMemberTask.get(k) || 0) + 15);
+      });
+    });
+
+    // Per-task summary (current behavior, with speed)
+    const data = tasks.map(t => {
+      // Aggregate actual minutes/count/points across all members for this task
+      let aggActualMins = 0, aggCount = 0, aggPoints = 0;
+      Object.entries(actualTimelineData).forEach(([, blocks]) => {
+        Object.values(blocks).forEach(tn => { if (tn === t.taskName) aggActualMins += 15; });
+      });
+      Object.values(perfAll).forEach(memberPerfs => {
+        const entry = memberPerfs[t.taskName];
+        if (entry) { aggCount += entry.count || 0; aggPoints += entry.points || 0; }
+      });
+      const usePoint = POINTS_BASED_SPEED_TASKS.includes(t.taskName);
+      const denom = usePoint ? aggPoints : aggCount;
+      const speedValue = denom > 0 && aggActualMins > 0 ? Math.round((aggActualMins / denom) * 10) / 10 : null;
+      const speedStr = speedValue !== null ? `${speedValue}分/${usePoint ? '点' : '件'}` : '';
+      return {
+        日付: t.date,
+        業務名: t.taskName,
+        担当者: getMemberById(t.assigneeId)?.name || '',
+        必要件数: t.plannedCount,
+        '1回あたり時間_分': t.minutesPerUnit || 0,
+        必要時間_分: t.plannedMinutes,
+        実績件数_合計: aggCount,
+        実績点数_合計: aggPoints,
+        実績時間_分_合計: aggActualMins,
+        平均スピード: speedStr,
+        ステータス: t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '未着手',
+        コメント: t.comment,
+      };
+    });
     exportToCSV(data, `daily_tasks_${selectedDate}.csv`);
+
+    // Per-member × per-task speed export (separate file)
+    const perMember: Record<string, unknown>[] = [];
+    members.forEach(m => {
+      const taskNamesForMember = new Set<string>();
+      // from actual timeline
+      Object.values(actualTimelineData[m.id] || {}).forEach(tn => taskNamesForMember.add(tn));
+      // from performance
+      Object.keys(perfAll[m.id] || {}).forEach(tn => taskNamesForMember.add(tn));
+      taskNamesForMember.forEach(tn => {
+        const actualMins = actualByMemberTask.get(`${m.id}|${tn}`) || 0;
+        const entry = perfAll[m.id]?.[tn];
+        const cnt = entry?.count || 0;
+        const pts = entry?.points || 0;
+        if (actualMins === 0 && cnt === 0 && pts === 0) return;
+        const usePoint = POINTS_BASED_SPEED_TASKS.includes(tn);
+        const denom = usePoint ? pts : cnt;
+        const spd = denom > 0 && actualMins > 0 ? Math.round((actualMins / denom) * 10) / 10 : null;
+        perMember.push({
+          日付: selectedDate,
+          担当者: m.name,
+          業務名: tn,
+          実績時間_分: actualMins,
+          件数: cnt,
+          点数: pts,
+          スピード: spd !== null ? `${spd}分/${usePoint ? '点' : '件'}` : '',
+        });
+      });
+    });
+    if (perMember.length > 0) {
+      exportToCSV(perMember, `member_speed_${selectedDate}.csv`);
+    }
   }
 
   function handleTaskSelect(taskName: string) {
@@ -612,56 +770,125 @@ export default function DailyPage() {
         {/* Plan Tab */}
         {viewTab === 'plan' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+            <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 text-[11px] text-blue-700">
+              💡 対応可能メンバー・実施時間は<strong>業務全体の設定</strong>です（毎日同じ設定で適用 / 自動割振にも連携）
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-green-50">
                   <tr className="text-left text-gray-600">
-                    <th className="px-4 py-3 font-semibold">業務名</th>
-                    <th className="px-4 py-3 font-semibold">必要件数/点数/回数</th>
-                    <th className="px-4 py-3 font-semibold">1回あたりの時間(分)</th>
-                    <th className="px-4 py-3 font-semibold">必要時間(分)</th>
-                    <th className="px-4 py-3 font-semibold">担当者</th>
-                    <th className="px-4 py-3 font-semibold">操作</th>
+                    <th className="px-3 py-3 font-semibold">業務名</th>
+                    <th className="px-3 py-3 font-semibold">必要件数/点数/回数</th>
+                    <th className="px-3 py-3 font-semibold">1回あたりの時間(分)</th>
+                    <th className="px-3 py-3 font-semibold">必要時間(分)</th>
+                    <th className="px-3 py-3 font-semibold">対応可能メンバー</th>
+                    <th className="px-3 py-3 font-semibold">実施時間</th>
+                    <th className="px-3 py-3 font-semibold">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tasks.length === 0 ? (
-                    <tr><td colSpan={6} className="px-4 py-12 text-center text-gray-400">タスクがありません。「+ タスク追加」から追加してください。</td></tr>
+                    <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">タスクがありません。「+ タスク追加」から追加してください。</td></tr>
                   ) : (
                     tasks.map(t => {
                       const isFromMonthly = t.comment === '月次予定から自動反映';
                       const isFromHandover = t.comment === '引き継ぎ';
+                      const assign = getAssignment(t.taskName);
+                      const memberNames = assign.assignableMemberIds
+                        .map(id => members.find(m => m.id === id)?.name)
+                        .filter(Boolean) as string[];
+                      const isPickerOpen = openMemberPicker === t.id;
                       return (
                         <tr key={t.id} className={`border-b border-gray-50 hover:bg-green-50/30 ${isFromHandover ? 'bg-amber-50/40' : isFromMonthly ? 'bg-blue-50/30' : ''}`}>
-                          <td className="px-4 py-3 font-medium text-gray-800">
+                          <td className="px-3 py-3 font-medium text-gray-800">
                             <div className="flex items-center gap-2">
                               <span className="w-3 h-3 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.taskName) }} />
                               <span className="text-xs">{t.taskName}</span>
                               {isFromHandover && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-bold">🔄 引き継ぎ</span>}
-                              {isFromMonthly && <span className="text-[10px] text-blue-500">(月次)</span>}
+                              {isFromMonthly && <span className="text-[10px] text-blue-500">(固定)</span>}
                             </div>
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3">
                             <input type="number" value={t.plannedCount} onChange={e => handleUpdateField(t.id, 'plannedCount', Number(e.target.value))} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3">
                             <input type="number" value={t.minutesPerUnit || 0} onChange={e => handleUpdateField(t.id, 'minutesPerUnit', Number(e.target.value))} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3">
                             <span className="font-bold text-orange-700">{t.plannedMinutes}分</span>
                           </td>
-                          <td className="px-4 py-3">
-                            <select value={t.assigneeId} onChange={e => handleUpdateField(t.id, 'assigneeId', e.target.value)} className="border rounded px-2 py-1 text-sm w-24">
-                              <option value="">未割当</option>
-                              <optgroup label="社員">
-                                {members.filter(m => m.role === 'employee').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                              </optgroup>
-                              <optgroup label="アルバイト">
-                                {members.filter(m => m.role === 'parttime').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                              </optgroup>
-                            </select>
+                          <td className="px-3 py-3 relative">
+                            <button
+                              onClick={() => setOpenMemberPicker(isPickerOpen ? null : t.id)}
+                              className="border rounded px-2 py-1 text-xs hover:bg-gray-50 min-w-[150px] text-left flex items-center gap-1"
+                            >
+                              {memberNames.length === 0 ? (
+                                <span className="text-gray-400">未設定</span>
+                              ) : (
+                                <span className="text-gray-700">{memberNames.length}名: {memberNames.slice(0, 2).join('、')}{memberNames.length > 2 ? `他${memberNames.length - 2}` : ''}</span>
+                              )}
+                              <span className="ml-auto text-gray-400 text-[10px]">▼</span>
+                            </button>
+                            {isPickerOpen && (
+                              <div ref={memberPickerRef} className="absolute z-30 mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-2 min-w-[200px]">
+                                <p className="text-[10px] font-bold text-gray-500 mb-1">社員</p>
+                                {members.filter(m => m.role === 'employee').map(m => (
+                                  <label key={m.id} className="flex items-center gap-2 px-1 py-0.5 text-xs hover:bg-gray-50 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={assign.assignableMemberIds.includes(m.id)}
+                                      onChange={() => toggleMemberForTask(t.taskName, m.id)}
+                                      className="accent-green-600"
+                                    />
+                                    {m.name}
+                                  </label>
+                                ))}
+                                <p className="text-[10px] font-bold text-gray-500 mt-2 mb-1">アルバイト</p>
+                                {members.filter(m => m.role === 'parttime').map(m => (
+                                  <label key={m.id} className="flex items-center gap-2 px-1 py-0.5 text-xs hover:bg-gray-50 cursor-pointer">
+                                    <input
+                                      type="checkbox"
+                                      checked={assign.assignableMemberIds.includes(m.id)}
+                                      onChange={() => toggleMemberForTask(t.taskName, m.id)}
+                                      className="accent-blue-600"
+                                    />
+                                    {m.name}
+                                  </label>
+                                ))}
+                              </div>
+                            )}
                           </td>
-                          <td className="px-4 py-3">
+                          <td className="px-3 py-3">
+                            <div className="space-y-1">
+                              {(assign.scheduledRanges || []).map((r, ri) => (
+                                <div key={ri} className="flex items-center gap-1">
+                                  <input
+                                    type="time"
+                                    value={r.start}
+                                    onChange={e => updateRange(t.taskName, ri, 'start', e.target.value)}
+                                    className="w-20 border rounded px-1 py-1 text-xs"
+                                  />
+                                  <span className="text-[10px] text-gray-400">〜</span>
+                                  <input
+                                    type="time"
+                                    value={r.end}
+                                    onChange={e => updateRange(t.taskName, ri, 'end', e.target.value)}
+                                    className="w-20 border rounded px-1 py-1 text-xs"
+                                  />
+                                  <button
+                                    onClick={() => removeRange(t.taskName, ri)}
+                                    className="text-red-400 hover:text-red-600 text-xs"
+                                    title="この時間帯を削除"
+                                  >✕</button>
+                                </div>
+                              ))}
+                              <button
+                                onClick={() => addRange(t.taskName)}
+                                className="text-[10px] text-blue-600 hover:text-blue-800 hover:underline"
+                              >+ 時間帯を追加</button>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">
                             <button onClick={() => handleDeleteTask(t.id)} className="text-red-400 hover:text-red-600 text-xs">削除</button>
                           </td>
                         </tr>
@@ -670,12 +897,13 @@ export default function DailyPage() {
                   )}
                   {tasks.length > 0 && (
                     <tr className="bg-orange-50 font-bold">
-                      <td className="px-4 py-3 text-gray-700">合計</td>
-                      <td className="px-4 py-3"></td>
-                      <td className="px-4 py-3"></td>
-                      <td className="px-4 py-3 text-orange-700">{totalRequiredMinutes}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
-                      <td className="px-4 py-3"></td>
-                      <td className="px-4 py-3"></td>
+                      <td className="px-3 py-3 text-gray-700">合計</td>
+                      <td className="px-3 py-3"></td>
+                      <td className="px-3 py-3"></td>
+                      <td className="px-3 py-3 text-orange-700">{totalRequiredMinutes}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-3 py-3"></td>
+                      <td className="px-3 py-3"></td>
+                      <td className="px-3 py-3"></td>
                     </tr>
                   )}
                 </tbody>
@@ -706,6 +934,12 @@ export default function DailyPage() {
                     const allTaskNames = new Set<string>();
                     tasks.forEach(t => allTaskNames.add(t.taskName));
                     Object.keys(actualTimelineAggregation).forEach(tn => allTaskNames.add(tn));
+                    // Also include tasks with performance data entered (e.g. 画像査定 points entered without timeline paint)
+                    Object.values(performanceData).forEach(memberPerfs => {
+                      Object.entries(memberPerfs).forEach(([tn, entry]) => {
+                        if ((entry.count || 0) > 0 || (entry.points || 0) > 0) allTaskNames.add(tn);
+                      });
+                    });
                     const sortedNames = Array.from(allTaskNames).sort();
 
                     if (sortedNames.length === 0) {
@@ -713,6 +947,9 @@ export default function DailyPage() {
                         <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">タスクがありません。各自がホーム画面で実績を入力すると、ここに集計されます。</td></tr>
                       );
                     }
+
+                    // Tasks whose avg speed is computed per-point (not per-count)
+                    const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
 
                     return sortedNames.map(taskName => {
                       const planTask = tasks.find(t => t.taskName === taskName);
@@ -729,8 +966,11 @@ export default function DailyPage() {
                         const entry = taskPerfs[taskName];
                         if (entry) { totalCount += entry.count; totalPoints += entry.points; }
                       });
-                      const avgSpeed = totalCount > 0 && actualMinutes > 0
-                        ? Math.round((actualMinutes / totalCount) * 10) / 10 : null;
+                      const useSpeedPerPoint = POINTS_BASED_SPEED_TASKS.includes(taskName);
+                      const speedDenom = useSpeedPerPoint ? totalPoints : totalCount;
+                      const speedUnit = useSpeedPerPoint ? '点' : '件';
+                      const avgSpeed = speedDenom > 0 && actualMinutes > 0
+                        ? Math.round((actualMinutes / speedDenom) * 10) / 10 : null;
 
                       return (
                         <tr key={taskName} className="border-b border-gray-50 hover:bg-blue-50/30">
@@ -763,7 +1003,7 @@ export default function DailyPage() {
                           </td>
                           <td className="px-4 py-3">
                             {perfConfig && avgSpeed !== null ? (
-                              <span className="text-xs font-bold text-green-700">{avgSpeed}分/件</span>
+                              <span className="text-xs font-bold text-green-700">{avgSpeed}分/{speedUnit}</span>
                             ) : <span className="text-xs text-gray-300">-</span>}
                           </td>
                           <td className="px-4 py-3">
@@ -771,8 +1011,9 @@ export default function DailyPage() {
                               {Object.entries(memberEntries).map(([memberId, mins]) => {
                                 const member = members.find(m => m.id === memberId);
                                 const memberPerf = performanceData[memberId]?.[taskName];
-                                const memberSpeed = memberPerf && memberPerf.count > 0 && mins > 0
-                                  ? Math.round((mins / memberPerf.count) * 10) / 10 : null;
+                                const memberDenom = useSpeedPerPoint ? (memberPerf?.points || 0) : (memberPerf?.count || 0);
+                                const memberSpeed = memberPerf && memberDenom > 0 && mins > 0
+                                  ? Math.round((mins / memberDenom) * 10) / 10 : null;
                                 return (
                                   <div key={memberId} className="flex items-center gap-1 flex-wrap">
                                     <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">
@@ -786,7 +1027,7 @@ export default function DailyPage() {
                                       </span>
                                     )}
                                     {perfConfig && memberSpeed !== null && (
-                                      <span className="text-[10px] text-green-600">{memberSpeed}分/件</span>
+                                      <span className="text-[10px] text-green-600">{memberSpeed}分/{speedUnit}</span>
                                     )}
                                   </div>
                                 );
@@ -1173,8 +1414,13 @@ export default function DailyPage() {
                                       {mg.taskGaps.map(tg => {
                                         const perfCfg = TASK_PERF_CONFIG[tg.taskName];
                                         const memberPerf = perfData[mg.member.id]?.[tg.taskName];
-                                        const speed = memberPerf && memberPerf.count > 0 && tg.actual > 0
-                                          ? Math.round((tg.actual / memberPerf.count) * 10) / 10 : null;
+                                        // Tasks whose speed is measured per-point (not per-count)
+                                        const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
+                                        const usePoint = POINTS_BASED_SPEED_TASKS.includes(tg.taskName);
+                                        const speedUnit = usePoint ? '点' : '件';
+                                        const denom = usePoint ? (memberPerf?.points || 0) : (memberPerf?.count || 0);
+                                        const speed = memberPerf && denom > 0 && tg.actual > 0
+                                          ? Math.round((tg.actual / denom) * 10) / 10 : null;
                                         return (
                                           <tr key={tg.taskName} className="border-t border-indigo-100">
                                             <td className="py-1 pr-3">
@@ -1195,7 +1441,7 @@ export default function DailyPage() {
                                               {perfCfg?.points && memberPerf ? `${memberPerf.points}点` : '-'}
                                             </td>
                                             <td className="py-1 text-right text-green-700 font-bold">
-                                              {speed !== null ? `${speed}分/件` : '-'}
+                                              {speed !== null ? `${speed}分/${speedUnit}` : '-'}
                                             </td>
                                           </tr>
                                         );
@@ -1238,24 +1484,54 @@ export default function DailyPage() {
             <h3 className="text-sm font-semibold text-gray-600">個人別タイムライン（15分単位 / クリックで入力）</h3>
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-500">業務選択:</label>
-              <select
-                value={selectedPaintTask}
-                onChange={e => setSelectedPaintTask(e.target.value)}
-                className="border rounded-lg px-3 py-1.5 text-xs min-w-[200px]"
-              >
-                <option value="">-- 業務を選択 --</option>
-                {TASK_CATEGORIES.map(cat => {
-                  const catTasks = (tasksByCategory[cat] || []);
-                  if (catTasks.length === 0) return null;
-                  return (
-                    <optgroup key={cat} label={cat}>
-                      {catTasks.map(t => (
-                        <option key={t.id} value={t.name}>{t.name}</option>
-                      ))}
-                    </optgroup>
-                  );
-                })}
-              </select>
+              <div className="relative" ref={taskSearchRef}>
+                <input
+                  type="text"
+                  placeholder="業務名で検索..."
+                  value={showTaskSearchDropdown ? taskSearchQuery : (selectedPaintTask || '')}
+                  onChange={e => { setTaskSearchQuery(e.target.value); setShowTaskSearchDropdown(true); }}
+                  onFocus={() => { setTaskSearchQuery(''); setShowTaskSearchDropdown(true); }}
+                  className="border rounded-lg px-3 py-1.5 text-xs min-w-[280px] bg-white"
+                />
+                {selectedPaintTask && !showTaskSearchDropdown && (
+                  <button onClick={() => { setSelectedPaintTask(''); setTaskSearchQuery(''); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-xs">✕</button>
+                )}
+                {showTaskSearchDropdown && (
+                  <div className="absolute z-50 mt-1 w-[360px] max-h-[400px] overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+                    {TASK_CATEGORIES.map(cat => {
+                      const catTasks = filteredSearchTasks.filter(t => t.category === cat);
+                      if (catTasks.length === 0) return null;
+                      return (
+                        <div key={cat}>
+                          <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider sticky top-0 z-10"
+                            style={{ backgroundColor: getCategoryBgColor(cat), color: getCategoryTextColor(cat) }}>
+                            {cat}
+                          </div>
+                          {catTasks.map(t => (
+                            <button
+                              key={t.id}
+                              onClick={() => {
+                                setSelectedPaintTask(t.name);
+                                setTaskSearchQuery('');
+                                setShowTaskSearchDropdown(false);
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2 ${
+                                selectedPaintTask === t.name ? 'bg-blue-50 font-bold' : ''
+                              }`}
+                            >
+                              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.name) }} />
+                              {t.name}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {filteredSearchTasks.length === 0 && (
+                      <div className="px-3 py-4 text-xs text-gray-400 text-center">該当する業務がありません</div>
+                    )}
+                  </div>
+                )}
+              </div>
               {selectedPaintTask && (
                 <span className="flex items-center gap-1 text-xs bg-gray-50 px-2 py-1 rounded">
                   <span className="w-3 h-3 rounded-sm" style={{ backgroundColor: getTaskColor(selectedPaintTask) }} />
@@ -1284,7 +1560,7 @@ export default function DailyPage() {
           )}
 
           {activeMembers.length === 0 ? (
-            <p className="text-gray-400 text-sm text-center py-8">この日にシフト登録されているメンバーがいません</p>
+            <p className="text-gray-400 text-sm text-center py-8">この日に対象メンバーがいません。シフト登録またはタイムラインを設定してください。</p>
           ) : (
             <div className="overflow-x-auto select-none">
               {/* Hour headers */}
@@ -1317,6 +1593,8 @@ export default function DailyPage() {
                     <div className="flex flex-1 h-7 bg-gray-50 rounded overflow-hidden border border-gray-100">
                       {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
                         const inShift = isBlockInShift(i, shift);
+                        // Allow clicking even without shift
+                        const isClickable = inShift || !shift;
                         const taskName = memberBlocks[String(i)];
                         const isHourStart = i % BLOCKS_PER_HOUR === 0;
 
@@ -1325,13 +1603,13 @@ export default function DailyPage() {
                             key={i}
                             className={`h-full transition-colors ${
                               isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'
-                            } ${inShift ? 'cursor-pointer hover:opacity-80' : 'opacity-30'}`}
+                            } ${isClickable ? 'cursor-pointer hover:opacity-80' : 'opacity-30'}`}
                             style={{
                               width: `${100 / TOTAL_BLOCKS}%`,
-                              backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
+                              backgroundColor: taskName ? getTaskColor(taskName) : (isClickable ? '#f9fafb' : '#f3f4f6'),
                             }}
                             title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
-                            onMouseDown={() => inShift && handleBlockMouseDown(m.id, i)}
+                            onMouseDown={() => isClickable && handleBlockMouseDown(m.id, i)}
                             onMouseEnter={() => handleBlockMouseEnter(m.id, i)}
                           />
                         );
@@ -1346,25 +1624,137 @@ export default function DailyPage() {
             </div>
           )}
 
+          {/* GAP: Daily task planned minutes vs Timeline total minutes */}
+          {tasks.length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-100">
+              <h4 className="text-xs font-semibold text-gray-500 mb-2">📊 予定 vs タイムライン GAP</h4>
+              <div className="overflow-x-auto">
+                <table className="w-full text-[11px]">
+                  <thead>
+                    <tr className="text-left text-gray-500">
+                      <th className="px-2 py-1 font-semibold">業務名</th>
+                      <th className="px-2 py-1 font-semibold text-right">予定（日次）</th>
+                      <th className="px-2 py-1 font-semibold text-right">タイムライン合計</th>
+                      <th className="px-2 py-1 font-semibold text-right">GAP</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(() => {
+                      // Aggregate timeline minutes per task across all members
+                      const timelineTotalByTask: Record<string, number> = {};
+                      Object.values(timelineData).forEach(memberBlocks => {
+                        Object.values(memberBlocks).forEach(tn => {
+                          timelineTotalByTask[tn] = (timelineTotalByTask[tn] || 0) + 15;
+                        });
+                      });
+                      // Merge task names from both sources
+                      const allNames = new Set([...tasks.map(t => t.taskName), ...Object.keys(timelineTotalByTask)]);
+                      // Sort by absolute GAP descending (largest GAP first), then alphabetically
+                      const sorted = Array.from(allNames).sort((a, b) => {
+                        const plannedA = tasks.filter(t => t.taskName === a).reduce((s, t) => s + t.plannedMinutes, 0);
+                        const timelineA = timelineTotalByTask[a] || 0;
+                        const gapA = Math.abs(timelineA - plannedA);
+                        const plannedB = tasks.filter(t => t.taskName === b).reduce((s, t) => s + t.plannedMinutes, 0);
+                        const timelineB = timelineTotalByTask[b] || 0;
+                        const gapB = Math.abs(timelineB - plannedB);
+                        if (gapB !== gapA) return gapB - gapA;
+                        return a.localeCompare(b);
+                      });
+                      let totalPlanned = 0, totalTimeline = 0;
+                      const rows = sorted.map(taskName => {
+                        const planned = tasks.filter(t => t.taskName === taskName).reduce((s, t) => s + t.plannedMinutes, 0);
+                        const timeline = timelineTotalByTask[taskName] || 0;
+                        const gap = timeline - planned;
+                        totalPlanned += planned;
+                        totalTimeline += timeline;
+                        if (planned === 0 && timeline === 0) return null;
+                        return (
+                          <tr key={taskName} className="border-b border-gray-50">
+                            <td className="px-2 py-1">
+                              <div className="flex items-center gap-1">
+                                <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                                <span className="truncate">{taskName}</span>
+                              </div>
+                            </td>
+                            <td className="px-2 py-1 text-right text-gray-600">{planned}分</td>
+                            <td className="px-2 py-1 text-right text-blue-700 font-semibold">{timeline}分</td>
+                            <td className={`px-2 py-1 text-right font-bold ${gap === 0 ? 'text-green-600' : gap > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                              {gap === 0 ? '±0' : (gap > 0 ? '+' : '')}{gap}分
+                            </td>
+                          </tr>
+                        );
+                      });
+                      const totalGap = totalTimeline - totalPlanned;
+                      return (
+                        <>
+                          {rows}
+                          <tr className="bg-gray-50 font-bold">
+                            <td className="px-2 py-1.5">合計</td>
+                            <td className="px-2 py-1.5 text-right text-gray-700">{totalPlanned}分</td>
+                            <td className="px-2 py-1.5 text-right text-blue-700">{totalTimeline}分</td>
+                            <td className={`px-2 py-1.5 text-right ${totalGap === 0 ? 'text-green-600' : totalGap > 0 ? 'text-blue-600' : 'text-red-600'}`}>
+                              {totalGap === 0 ? '±0' : (totalGap > 0 ? '+' : '')}{totalGap}分
+                            </td>
+                          </tr>
+                        </>
+                      );
+                    })()}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
           {/* Per-member task breakdown */}
-          {memberTimelineSummary.some(ms => Object.keys(ms.taskBreakdown).length > 0) && (
+          {memberTimelineSummary.some(ms => Object.keys(ms.taskBreakdown).length > 0 || Object.keys(ms.actualTaskBreakdown).length > 0) && (
             <div className="mt-4 pt-4 border-t border-gray-100">
               <h4 className="text-xs font-semibold text-gray-500 mb-2">業務内訳（タイムライン）</h4>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {memberTimelineSummary.filter(ms => Object.keys(ms.taskBreakdown).length > 0).map(ms => (
-                  <div key={ms.member.id} className="bg-gray-50 rounded-lg p-3">
-                    <p className="text-xs font-bold text-gray-700 mb-1">{ms.member.name}（合計 {ms.plannedMinutes}分）</p>
-                    <div className="space-y-1">
-                      {Object.entries(ms.taskBreakdown).sort((a, b) => b[1] - a[1]).map(([taskName, mins]) => (
-                        <div key={taskName} className="flex items-center gap-2 text-[10px]">
-                          <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
-                          <span className="flex-1 text-gray-600 truncate">{taskName.replace(/^【[^】]+】/, '')}</span>
-                          <span className="font-bold text-gray-700">{mins}分</span>
-                        </div>
-                      ))}
+                {memberTimelineSummary.filter(ms => Object.keys(ms.taskBreakdown).length > 0 || Object.keys(ms.actualTaskBreakdown).length > 0).map(ms => {
+                  // Merge planned and actual task names
+                  const allTaskNames = new Set([...Object.keys(ms.taskBreakdown), ...Object.keys(ms.actualTaskBreakdown)]);
+                  const memberPerf = performanceData[ms.member.id] || {};
+                  return (
+                    <div key={ms.member.id} className="bg-gray-50 rounded-lg p-3">
+                      <p className="text-xs font-bold text-gray-700 mb-1">
+                        {ms.member.name}（予定 {ms.plannedMinutes}分 / 実績 {ms.actualMinutes}分）
+                      </p>
+                      <div className="space-y-1.5">
+                        {Array.from(allTaskNames).sort().map(taskName => {
+                          const plannedMins = ms.taskBreakdown[taskName] || 0;
+                          const actualMins = ms.actualTaskBreakdown[taskName] || 0;
+                          const perfConfig = TASK_PERF_CONFIG[taskName];
+                          const perf = memberPerf[taskName];
+                          const speed = perf && perf.count > 0 && actualMins > 0
+                            ? Math.round((actualMins / perf.count) * 10) / 10 : null;
+                          return (
+                            <div key={taskName}>
+                              <div className="flex items-center gap-2 text-[10px]">
+                                <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
+                                <span className="flex-1 text-gray-600 truncate">{taskName.replace(/^【[^】]+】/, '')}</span>
+                                <span className="text-gray-500">{plannedMins}分</span>
+                                <span className="font-bold text-blue-700">{actualMins}分</span>
+                              </div>
+                              {perfConfig && perf && (perf.count > 0 || perf.points > 0) && (
+                                <div className="ml-5 flex items-center gap-2 text-[10px] mt-0.5">
+                                  {perfConfig.count && perf.count > 0 && (
+                                    <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded font-semibold">{perf.count}件</span>
+                                  )}
+                                  {perfConfig.points && perf.points > 0 && (
+                                    <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded font-semibold">{perf.points}点</span>
+                                  )}
+                                  {speed !== null && (
+                                    <span className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded font-semibold">{speed}分/件</span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

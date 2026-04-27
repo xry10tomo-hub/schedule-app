@@ -1,12 +1,23 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getShippingRecords, setShippingRecords, generateId, exportToCSV, fmtNum } from '@/lib/store';
+import { useAppContext, getShippingRecords, setShippingRecords, getDailyTasks, getActualPerformanceForDate, setActualPerformanceForDate, generateId, exportToCSV, fmtNum } from '@/lib/store';
+import type { ActualPerformanceEntry } from '@/lib/store';
 import type { ShippingRecord } from '@/lib/types';
 
 const CARRIERS = ['郵便局（AM）', 'ヤマト（AM）', '佐川（AM）', '郵便局（PM）', 'ヤマト（PM）', '佐川（PM）'];
 const DAY_TYPES = ['当日', '両日'] as const;
+
+// Carrier color map (背景塗りつぶし)
+const CARRIER_COLOR: Record<string, string> = {
+  '郵便局（AM）': 'bg-red-500 text-white font-bold',
+  '佐川（AM）': 'bg-blue-500 text-white font-bold',
+  'ヤマト（AM）': 'bg-green-500 text-white font-bold',
+  '郵便局（PM）': 'bg-red-200 text-red-900 font-bold',
+  '佐川（PM）': 'bg-blue-200 text-blue-900 font-bold',
+  'ヤマト（PM）': 'bg-green-200 text-green-900 font-bold',
+};
 
 export default function ShippingPage() {
   const { members, dataVersion, selectedDate } = useAppContext();
@@ -16,13 +27,132 @@ export default function ShippingPage() {
     setRecordsState(getShippingRecords().filter(r => r.date === selectedDate));
   }, [selectedDate, dataVersion]);
 
+  // Carry over unfinished records (creator empty) from previous day to today
+  // - Only carries records that are NOT themselves carried-over (carriedOver !== true)
+  // - Marks copied records as carriedOver: true to prevent chain carryover
+  // - One-time cleanup: marks all existing unfinished records as carriedOver to stop current chain
+  const carriedOverRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (carriedOverRef.current.has(selectedDate)) return;
+
+    const all = getShippingRecords();
+
+    // ========== One-time cleanup: stop the current carryover chain ==========
+    // Mark all existing records (empty creator, no carriedOver flag) as carriedOver: true
+    const cleanupFlagKey = 'schedule_shipping_chain_cleanup_v1';
+    const cleanupDone = localStorage.getItem(cleanupFlagKey) === 'true';
+    let workingAll = all;
+    if (!cleanupDone) {
+      const cleaned = all.map(r => {
+        if (!r.creator && r.carriedOver === undefined) {
+          return { ...r, carriedOver: true };
+        }
+        return r;
+      });
+      setShippingRecords(cleaned);
+      workingAll = cleaned;
+      localStorage.setItem(cleanupFlagKey, 'true');
+    }
+
+    // ========== Persistent per-date flag ==========
+    const flagKey = 'schedule_shipping_carryover_done';
+    let processed: string[] = [];
+    try { processed = JSON.parse(localStorage.getItem(flagKey) || '[]'); } catch { processed = []; }
+    if (processed.includes(selectedDate)) {
+      carriedOverRef.current.add(selectedDate);
+      if (!cleanupDone) loadRecords();
+      return;
+    }
+
+    // Calculate previous day
+    const prev = new Date(selectedDate + 'T00:00:00');
+    prev.setDate(prev.getDate() - 1);
+    const prevDateStr = prev.toLocaleDateString('en-CA');
+
+    // Only carry records that:
+    // - are on the previous day
+    // - have empty creator (unfinished)
+    // - are NOT themselves carried-over (carriedOver !== true)
+    const unfinishedPrev = workingAll.filter(r =>
+      r.date === prevDateStr && !r.creator && r.carriedOver !== true
+    );
+
+    if (unfinishedPrev.length > 0) {
+      const todayRecords = workingAll.filter(r => r.date === selectedDate);
+      const toCarry: ShippingRecord[] = [];
+      for (const r of unfinishedPrev) {
+        const dup = todayRecords.find(t => t.carrier === r.carrier && t.points === r.points && (t.dayType || '当日') === (r.dayType || '当日') && !t.creator);
+        if (!dup) {
+          toCarry.push({
+            ...r,
+            id: generateId(),
+            date: selectedDate,
+            createdAt: new Date().toISOString(),
+            carriedOver: true, // Mark copy so it won't be carried again
+          });
+        }
+      }
+      if (toCarry.length > 0) {
+        setShippingRecords([...workingAll, ...toCarry]);
+        loadRecords();
+      } else if (!cleanupDone) {
+        loadRecords();
+      }
+    } else if (!cleanupDone) {
+      loadRecords();
+    }
+
+    // Mark date as processed (persistent)
+    processed.push(selectedDate);
+    localStorage.setItem(flagKey, JSON.stringify(processed.slice(-90))); // keep last 90 days
+    carriedOverRef.current.add(selectedDate);
+  }, [selectedDate, loadRecords]);
+
   useEffect(() => { loadRecords(); }, [loadRecords]);
+
+  // Sync shipping creators to home performance data for 【査定】計算書作成
+  function syncCreatorToPerformance() {
+    const allRecords = getShippingRecords().filter(r => r.date === selectedDate);
+    const perfData = getActualPerformanceForDate(selectedDate);
+    const newPerfData = { ...perfData };
+
+    // Count points per creator (by member name -> find member id)
+    const creatorPoints: Record<string, { count: number; points: number }> = {};
+    allRecords.forEach(r => {
+      if (!r.creator) return;
+      const member = members.find(m => m.name === r.creator);
+      if (!member) return;
+      if (!creatorPoints[member.id]) creatorPoints[member.id] = { count: 0, points: 0 };
+      creatorPoints[member.id].count += 1;
+      creatorPoints[member.id].points += r.points;
+    });
+
+    // Update performance data for 【査定】計算書作成
+    const taskName = '【査定】計算書作成';
+    for (const [memberId, data] of Object.entries(creatorPoints)) {
+      if (!newPerfData[memberId]) newPerfData[memberId] = {};
+      newPerfData[memberId][taskName] = { count: data.count, points: data.points };
+    }
+
+    // Clear data for members who no longer have records
+    members.forEach(m => {
+      if (!creatorPoints[m.id] && newPerfData[m.id]?.[taskName]) {
+        newPerfData[m.id][taskName] = { count: 0, points: 0 };
+      }
+    });
+
+    setActualPerformanceForDate(selectedDate, newPerfData);
+  }
 
   // ===== Inline row helpers =====
   function updateRecord(id: string, patch: Partial<ShippingRecord>) {
     const all = getShippingRecords().map(r => r.id === id ? { ...r, ...patch } : r);
     setShippingRecords(all);
     loadRecords();
+    if ('creator' in patch) {
+      // Need small delay to ensure records are saved first
+      setTimeout(() => syncCreatorToPerformance(), 50);
+    }
   }
 
   function addRow() {
@@ -69,6 +199,13 @@ export default function ShippingPage() {
   const getParcels = (r: ShippingRecord) => (r.parcels && r.parcels >= 1) ? r.parcels : 1;
   const sumParcels = (rs: ShippingRecord[]) => rs.reduce((s, r) => s + getParcels(r), 0);
 
+  // Sorted records: 予定 (no creator) first, 実績済 (has creator) to the bottom
+  const sortedRecords = [...records].sort((a, b) => {
+    const aStatus = a.creator ? 1 : 0;
+    const bStatus = b.creator ? 1 : 0;
+    return aStatus - bStatus;
+  });
+
   // Dashboard calculations - 件数 = record count, 口数 = parcels total
   const todayRecords = records.filter(r => (r.dayType || '当日') === '当日');
   const ryojitsuRecords = records.filter(r => (r.dayType || '') === '両日');
@@ -96,6 +233,28 @@ export default function ShippingPage() {
   const ryojitsuRemainCnt = ryojitsuTotalCnt - ryojitsuDoneCnt;
   const ryojitsuRemainParcels = ryojitsuTotalParcels - ryojitsuDoneParcels;
   const ryojitsuRemainPts = ryojitsuTotalPts - ryojitsuDonePts;
+
+  // 実査定予定 & 残りリソース
+  const dailyTasks = getDailyTasks().filter(t => t.date === selectedDate);
+  const assessPlannedPoints = dailyTasks.filter(t => t.taskName === '【査定】計算書作成').reduce((s, t) => s + t.plannedCount, 0);
+  const assessPlannedCount = dailyTasks.filter(t => t.taskName === '【補助】郵送物開封').reduce((s, t) => s + t.plannedCount, 0);
+  const todayRemainResource = todayRemainPts * 2;
+  const ryojitsuRemainResource = ryojitsuRemainPts * 2;
+
+  // 合計 (当日 + 両日)
+  const totalCnt = todayTotalCnt + ryojitsuTotalCnt;
+  const totalPts = todayTotalPts + ryojitsuTotalPts;
+  const totalDoneCnt = todayDoneCnt + ryojitsuDoneCnt;
+  const totalDonePts = todayDonePts + ryojitsuDonePts;
+  const totalRemainCnt = todayRemainCnt + ryojitsuRemainCnt;
+  const totalRemainPts = todayRemainPts + ryojitsuRemainPts;
+
+  // 郵便局AM率 (午前中の郵便局のみで抽出)
+  const yubinAmRecords = records.filter(r => r.carrier === '郵便局（AM）');
+  const yubinCnt = yubinAmRecords.length;
+  const yubinPts = yubinAmRecords.reduce((s, r) => s + r.points, 0);
+  const yubinCntRate = totalCnt > 0 ? Math.round((yubinCnt / totalCnt) * 100) : 0;
+  const yubinPtsRate = totalPts > 0 ? Math.round((yubinPts / totalPts) * 100) : 0;
 
   // 配送業者別集計
   const carrierStats = CARRIERS.map(c => {
@@ -125,9 +284,41 @@ export default function ShippingPage() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <h1 className="text-2xl font-bold text-gray-800">郵送点数</h1>
-          <div className="flex items-center gap-3">
-            <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{selectedDate}</span>
-            <button onClick={handleExportCSV} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">CSV出力</button>
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{selectedDate}</span>
+              <button onClick={handleExportCSV} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">CSV出力</button>
+            </div>
+            {/* 郵便局AM率（右上コンパクト） */}
+            <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-1.5 text-xs flex items-center gap-3">
+              <span className="font-bold text-rose-700">📮 郵便局AM率</span>
+              <span className="text-rose-600"><b>{yubinCnt}</b>/{totalCnt}件 <b>({yubinCntRate}%)</b></span>
+              <span className="text-rose-600"><b>{yubinPts}</b>/{totalPts}点 <b>({yubinPtsRate}%)</b></span>
+            </div>
+          </div>
+        </div>
+
+        {/* 実査定予定 & 残りリソース - TOP highlight */}
+        <div className="bg-gradient-to-r from-indigo-50 to-amber-50 rounded-2xl border-2 border-indigo-300 shadow-md p-4">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="bg-white/80 rounded-xl px-4 py-4 border-l-4 border-indigo-500">
+              <span className="text-[10px] text-indigo-600 font-bold uppercase tracking-wider">実査定 予定点数</span>
+              <p className="text-2xl font-extrabold text-indigo-700 mt-1">{fmtNum(assessPlannedPoints)}<span className="text-sm font-bold">点</span></p>
+            </div>
+            <div className="bg-white/80 rounded-xl px-4 py-4 border-l-4 border-indigo-500">
+              <span className="text-[10px] text-indigo-600 font-bold uppercase tracking-wider">実査定 予定件数</span>
+              <p className="text-2xl font-extrabold text-indigo-700 mt-1">{fmtNum(assessPlannedCount)}<span className="text-sm font-bold">件</span></p>
+            </div>
+            <div className="bg-white/80 rounded-xl px-4 py-4 border-l-4 border-red-500">
+              <span className="text-[10px] text-red-600 font-bold uppercase tracking-wider">当日 残りリソース</span>
+              <p className="text-2xl font-extrabold text-red-700 mt-1">{fmtNum(todayRemainResource)}<span className="text-sm font-bold">分</span></p>
+              <p className="text-[10px] text-red-400 mt-0.5">（{fmtNum(todayRemainPts)}点 × 2分）</p>
+            </div>
+            <div className="bg-white/80 rounded-xl px-4 py-4 border-l-4 border-orange-500">
+              <span className="text-[10px] text-orange-600 font-bold uppercase tracking-wider">両日 残りリソース</span>
+              <p className="text-2xl font-extrabold text-orange-700 mt-1">{fmtNum(ryojitsuRemainResource)}<span className="text-sm font-bold">分</span></p>
+              <p className="text-[10px] text-orange-400 mt-0.5">（{fmtNum(ryojitsuRemainPts)}点 × 2分）</p>
+            </div>
           </div>
         </div>
 
@@ -136,12 +327,12 @@ export default function ShippingPage() {
           {/* 当日 row */}
           <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
             <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
-              <span className="text-[10px] text-blue-600 font-bold">当日 予定件数</span>
+              <span className="text-[10px] text-blue-600 font-bold">当日 到着件数</span>
               <p className="text-xl font-bold text-blue-700">{fmtNum(todayTotalCnt)}<span className="text-sm">件</span></p>
               {todayTotalParcels !== todayTotalCnt && <p className="text-[10px] text-blue-500">（{fmtNum(todayTotalParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
-              <span className="text-[10px] text-blue-600 font-bold">当日 予定点数</span>
+              <span className="text-[10px] text-blue-600 font-bold">当日 到着点数</span>
               <p className="text-xl font-bold text-blue-700">{fmtNum(todayTotalPts)}<span className="text-sm">点</span></p>
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
@@ -166,12 +357,12 @@ export default function ShippingPage() {
           {/* 両日 row */}
           <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
             <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
-              <span className="text-[10px] text-purple-600 font-bold">両日 予定件数</span>
+              <span className="text-[10px] text-purple-600 font-bold">両日 到着件数</span>
               <p className="text-xl font-bold text-purple-700">{fmtNum(ryojitsuTotalCnt)}<span className="text-sm">件</span></p>
               {ryojitsuTotalParcels !== ryojitsuTotalCnt && <p className="text-[10px] text-purple-500">（{fmtNum(ryojitsuTotalParcels)}件）</p>}
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
-              <span className="text-[10px] text-purple-600 font-bold">両日 予定点数</span>
+              <span className="text-[10px] text-purple-600 font-bold">両日 到着点数</span>
               <p className="text-xl font-bold text-purple-700">{fmtNum(ryojitsuTotalPts)}<span className="text-sm">点</span></p>
             </div>
             <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
@@ -191,6 +382,33 @@ export default function ShippingPage() {
             <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
               <span className="text-[10px] text-orange-600 font-bold">両日 残り点数</span>
               <p className="text-xl font-bold text-orange-700">{fmtNum(ryojitsuRemainPts)}<span className="text-sm">点</span></p>
+            </div>
+          </div>
+          {/* 合計 row */}
+          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
+            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
+              <span className="text-[10px] text-gray-700 font-bold">合計 到着件数</span>
+              <p className="text-xl font-bold text-gray-800">{fmtNum(totalCnt)}<span className="text-sm">件</span></p>
+            </div>
+            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
+              <span className="text-[10px] text-gray-700 font-bold">合計 到着点数</span>
+              <p className="text-xl font-bold text-gray-800">{fmtNum(totalPts)}<span className="text-sm">点</span></p>
+            </div>
+            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
+              <span className="text-[10px] text-gray-700 font-bold">合計 実績件数</span>
+              <p className="text-xl font-bold text-gray-800">{fmtNum(totalDoneCnt)}<span className="text-sm">件</span></p>
+            </div>
+            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
+              <span className="text-[10px] text-gray-700 font-bold">合計 実績点数</span>
+              <p className="text-xl font-bold text-gray-800">{fmtNum(totalDonePts)}<span className="text-sm">点</span></p>
+            </div>
+            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
+              <span className="text-[10px] text-gray-700 font-bold">合計 残り件数</span>
+              <p className="text-xl font-bold text-gray-800">{fmtNum(totalRemainCnt)}<span className="text-sm">件</span></p>
+            </div>
+            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
+              <span className="text-[10px] text-gray-700 font-bold">合計 残り点数</span>
+              <p className="text-xl font-bold text-gray-800">{fmtNum(totalRemainPts)}<span className="text-sm">点</span></p>
             </div>
           </div>
         </div>
@@ -235,120 +453,163 @@ export default function ShippingPage() {
           </div>
         </div>
 
-        {/* Records Table - inline edit */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-green-50">
-              <tr className="text-left text-gray-600">
-                <th className="px-4 py-3 font-semibold">配送業者</th>
-                <th className="px-4 py-3 font-semibold">区分</th>
-                <th className="px-4 py-3 font-semibold">口数</th>
-                <th className="px-4 py-3 font-semibold">点数</th>
-                <th className="px-4 py-3 font-semibold">検品者</th>
-                <th className="px-4 py-3 font-semibold">作成者</th>
-                <th className="px-4 py-3 font-semibold">状態</th>
-                <th className="px-4 py-3 font-semibold">操作</th>
+        {/* Records Table - split into 予定 (left) / 実績 (right) */}
+        {(() => {
+          const planRecords = records.filter(r => !r.creator);
+          const doneRecords = records.filter(r => !!r.creator);
+          const planPts = planRecords.reduce((s, r) => s + r.points, 0);
+          const donePts = doneRecords.reduce((s, r) => s + r.points, 0);
+
+          const renderRow = (r: ShippingRecord, isPlanSide: boolean) => {
+            const isRyojitsu = (r.dayType || '当日') === '両日';
+            const carrierClass = CARRIER_COLOR[r.carrier] || '';
+            return (
+              <tr key={r.id} className={`border-b border-gray-50 text-center ${isPlanSide ? 'hover:bg-yellow-50/30' : 'bg-gray-100/40 hover:bg-gray-200/60'}`}>
+                <td className="px-1 py-2">
+                  <select
+                    value={r.carrier}
+                    onChange={e => updateRecord(r.id, { carrier: e.target.value })}
+                    className={`w-full border rounded px-1 py-1 text-xs text-center ${carrierClass}`}
+                  >
+                    <option value="" className="bg-white text-gray-800">選択</option>
+                    {CARRIERS.map(c => <option key={c} value={c} className="bg-white text-gray-800">{c}</option>)}
+                  </select>
+                </td>
+                <td className="px-1 py-2">
+                  <select
+                    value={r.dayType || '当日'}
+                    onChange={e => updateRecord(r.id, { dayType: e.target.value })}
+                    className={`w-full rounded px-1 py-1 text-xs text-center ${isRyojitsu ? 'border-2 border-red-500 text-red-600 font-bold bg-transparent' : 'border'}`}
+                  >
+                    {DAY_TYPES.map(d => <option key={d} value={d} className="text-gray-800 bg-white">{d}</option>)}
+                  </select>
+                </td>
+                <td className="px-1 py-2">
+                  <input
+                    type="number"
+                    value={r.points}
+                    min={0}
+                    onChange={e => updateRecord(r.id, { points: Number(e.target.value) })}
+                    className="w-full border rounded px-1 py-1 text-xs text-center"
+                  />
+                </td>
+                <td className="px-1 py-2">
+                  <select
+                    value={r.creator}
+                    onChange={e => updateRecord(r.id, { creator: e.target.value })}
+                    className="w-full border rounded px-1 py-1 text-xs text-center"
+                  >
+                    <option value="">未入力</option>
+                    {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                  </select>
+                </td>
+                <td className="px-1 py-2">
+                  <select
+                    value={r.inspector}
+                    onChange={e => updateRecord(r.id, { inspector: e.target.value })}
+                    className="w-full border rounded px-1 py-1 text-xs text-center"
+                  >
+                    <option value="">選択</option>
+                    {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
+                  </select>
+                </td>
+                <td className="px-1 py-2">
+                  <div className="flex gap-1 justify-center">
+                    <button onClick={() => copyRow(r)} className="text-blue-400 hover:text-blue-600 text-xs">コピー</button>
+                    <button onClick={() => handleDelete(r.id)} className="text-red-400 hover:text-red-600 text-xs">削除</button>
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {records.length === 0 ? (
-                <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">記録がありません。下の「+ 行を追加」から登録してください。</td></tr>
-              ) : (
-                records.map(r => (
-                  <tr key={r.id} className="border-b border-gray-50 hover:bg-green-50/30">
-                    <td className="px-3 py-2">
-                      <select
-                        value={r.carrier}
-                        onChange={e => updateRecord(r.id, { carrier: e.target.value })}
-                        className="w-full border rounded px-2 py-1 text-xs"
-                      >
-                        <option value="">選択</option>
-                        {CARRIERS.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-3 py-2">
-                      <select
-                        value={r.dayType || '当日'}
-                        onChange={e => updateRecord(r.id, { dayType: e.target.value })}
-                        className="w-full border rounded px-2 py-1 text-xs"
-                      >
-                        {DAY_TYPES.map(d => <option key={d} value={d}>{d}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="number"
-                        value={getParcels(r)}
-                        min={1}
-                        onChange={e => updateRecord(r.id, { parcels: Math.max(1, Number(e.target.value)) })}
-                        className="w-16 border rounded px-2 py-1 text-xs text-right"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <input
-                        type="number"
-                        value={r.points}
-                        min={0}
-                        onChange={e => updateRecord(r.id, { points: Number(e.target.value) })}
-                        className="w-20 border rounded px-2 py-1 text-xs text-right"
-                      />
-                    </td>
-                    <td className="px-3 py-2">
-                      <select
-                        value={r.inspector}
-                        onChange={e => updateRecord(r.id, { inspector: e.target.value })}
-                        className="w-full border rounded px-2 py-1 text-xs"
-                      >
-                        <option value="">選択</option>
-                        {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-3 py-2">
-                      <select
-                        value={r.creator}
-                        onChange={e => updateRecord(r.id, { creator: e.target.value })}
-                        className="w-full border rounded px-2 py-1 text-xs"
-                      >
-                        <option value="">未入力</option>
-                        {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
-                      </select>
-                    </td>
-                    <td className="px-3 py-2">
-                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${r.creator ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                        {r.creator ? '実績済' : '予定'}
-                      </span>
-                    </td>
-                    <td className="px-3 py-2 flex gap-2">
-                      <button onClick={() => copyRow(r)} className="text-blue-400 hover:text-blue-600 text-xs">コピー</button>
-                      <button onClick={() => handleDelete(r.id)} className="text-red-400 hover:text-red-600 text-xs">削除</button>
+            );
+          };
+
+          const renderTable = (rows: ShippingRecord[], isPlanSide: boolean) => (
+            <table className="w-full text-sm table-fixed">
+              <colgroup>
+                <col style={{ width: '24%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '11%' }} />
+                <col style={{ width: '17%' }} />
+                <col style={{ width: '20%' }} />
+                <col style={{ width: '17%' }} />
+              </colgroup>
+              <thead className={isPlanSide ? 'bg-yellow-50' : 'bg-emerald-50'}>
+                <tr className={`text-center ${isPlanSide ? 'text-yellow-800' : 'text-emerald-800'}`}>
+                  <th className="px-1 py-3 font-semibold">配送業者</th>
+                  <th className="px-1 py-3 font-semibold">区分</th>
+                  <th className="px-1 py-3 font-semibold">点数</th>
+                  <th className="px-1 py-3 font-semibold">作成者</th>
+                  <th className="px-1 py-3 font-semibold">検品者</th>
+                  <th className="px-1 py-3 font-semibold">操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-gray-400 text-xs">
+                      {isPlanSide
+                        ? '予定がありません。下の「+ 行を追加」から登録してください。'
+                        : '実績がまだありません。予定の作成者を選択すると、ここに移動します。'}
                     </td>
                   </tr>
-                ))
-              )}
-              {records.length > 0 && (
-                <tr className="bg-gray-50 font-bold">
-                  <td className="px-4 py-3 text-gray-700">合計</td>
-                  <td className="px-4 py-3"></td>
-                  <td className="px-4 py-3 text-gray-700">{fmtNum(sumParcels(records))}口</td>
-                  <td className="px-4 py-3 text-gray-700">{fmtNum(records.reduce((s, r) => s + r.points, 0))}点</td>
-                  <td className="px-4 py-3"></td>
-                  <td className="px-4 py-3"></td>
-                  <td className="px-4 py-3 text-gray-500 text-xs font-normal">{fmtNum(records.length)}件</td>
-                  <td className="px-4 py-3"></td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-          {/* Inline add button under the table */}
-          <div className="px-4 py-3 border-t border-gray-100 bg-gray-50/50">
-            <button
-              onClick={addRow}
-              className="w-full border-2 border-dashed border-green-300 hover:border-green-500 hover:bg-green-50 text-green-700 text-sm font-semibold py-2 rounded-lg transition-colors"
-            >
-              + 行を追加
-            </button>
-          </div>
-        </div>
+                ) : (
+                  rows.map(r => renderRow(r, isPlanSide))
+                )}
+                {rows.length > 0 && (
+                  <tr className={`font-bold text-center ${isPlanSide ? 'bg-yellow-50' : 'bg-emerald-50'}`}>
+                    <td className={`px-1 py-3 ${isPlanSide ? 'text-yellow-800' : 'text-emerald-800'}`}>合計</td>
+                    <td className="px-1 py-3"></td>
+                    <td className={`px-1 py-3 ${isPlanSide ? 'text-yellow-800' : 'text-emerald-800'}`}>
+                      {fmtNum(rows.reduce((s, r) => s + r.points, 0))}点
+                    </td>
+                    <td className="px-1 py-3"></td>
+                    <td className="px-1 py-3"></td>
+                    <td className={`px-1 py-3 text-xs font-normal ${isPlanSide ? 'text-yellow-700' : 'text-emerald-700'}`}>
+                      {fmtNum(rows.length)}件
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          );
+
+          return (
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              {/* 予定（左） */}
+              <div className="bg-white rounded-xl shadow-sm border-2 border-yellow-200 overflow-hidden">
+                <div className="bg-yellow-100 border-b border-yellow-200 px-4 py-2 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-yellow-800 flex items-center gap-2">
+                    📋 予定 <span className="text-[10px] bg-yellow-200 text-yellow-800 rounded-full px-2 py-0.5">{planRecords.length}件 / {planPts}点</span>
+                  </h3>
+                </div>
+                <div className="overflow-x-auto">
+                  {renderTable(planRecords, true)}
+                </div>
+                <div className="px-4 py-3 border-t border-yellow-100 bg-yellow-50/40">
+                  <button
+                    onClick={addRow}
+                    className="w-full border-2 border-dashed border-yellow-400 hover:border-yellow-500 hover:bg-yellow-50 text-yellow-700 text-sm font-semibold py-2 rounded-lg transition-colors"
+                  >
+                    + 行を追加
+                  </button>
+                </div>
+              </div>
+
+              {/* 実績（右） */}
+              <div className="bg-white rounded-xl shadow-sm border-2 border-emerald-200 overflow-hidden">
+                <div className="bg-emerald-100 border-b border-emerald-200 px-4 py-2 flex items-center justify-between">
+                  <h3 className="text-sm font-bold text-emerald-800 flex items-center gap-2">
+                    ✅ 実績 <span className="text-[10px] bg-emerald-200 text-emerald-800 rounded-full px-2 py-0.5">{doneRecords.length}件 / {donePts}点</span>
+                  </h3>
+                  <span className="text-[10px] text-emerald-700">作成者を入力すると移動します</span>
+                </div>
+                <div className="overflow-x-auto">
+                  {renderTable(doneRecords, false)}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </DashboardLayout>
   );

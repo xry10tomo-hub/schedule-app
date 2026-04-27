@@ -70,6 +70,30 @@ export default function ShiftsPage() {
     setSelectingCell(null);
   }
 
+  // Save custom time range (free-form input)
+  function saveCustomShift(memberId: string, day: number, startTime: string, endTime: string) {
+    if (!startTime || !endTime) return;
+    // Validate format HH:MM
+    const timeRegex = /^\d{1,2}:\d{2}$/;
+    if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
+      alert('時間はHH:MM形式で入力してください（例：10:30）');
+      return;
+    }
+    const dateStr = `${monthStr}-${String(day).padStart(2, '0')}`;
+    const all = getShifts().filter(s => !(s.memberId === memberId && s.date === dateStr));
+    const newShift: ShiftEntry = {
+      id: generateId(),
+      memberId,
+      date: dateStr,
+      startTime: startTime.padStart(5, '0'),
+      endTime: endTime.padStart(5, '0'),
+      note: '',
+    };
+    setShifts([...all, newShift]);
+    loadShifts();
+    setSelectingCell(null);
+  }
+
   function removeShift(memberId: string, day: number) {
     const dateStr = `${monthStr}-${String(day).padStart(2, '0')}`;
     const all = getShifts().filter(s => !(s.memberId === memberId && s.date === dateStr));
@@ -169,7 +193,7 @@ export default function ShiftsPage() {
               </div>
 
               {isSelecting && (
-                <div className="absolute z-30 top-full left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-xl p-2 w-40 space-y-1" onClick={e => e.stopPropagation()}>
+                <div className="absolute z-30 top-full left-1/2 -translate-x-1/2 bg-white border border-gray-200 rounded-lg shadow-xl p-2 w-48 space-y-1" onClick={e => e.stopPropagation()}>
                   <p className="text-xs font-semibold text-gray-600 mb-1">{m.name} - {d}日</p>
                   {presets.map(preset => (
                     <button
@@ -184,6 +208,12 @@ export default function ShiftsPage() {
                       {preset.start} - {preset.end}
                     </button>
                   ))}
+                  {/* Custom time input */}
+                  <CustomTimeInput
+                    initialStart={shift?.startTime || ''}
+                    initialEnd={shift?.endTime || ''}
+                    onSave={(start, end) => saveCustomShift(m.id, d, start, end)}
+                  />
                   {shift && (
                     <>
                       <button
@@ -258,6 +288,11 @@ export default function ShiftsPage() {
           </div>
         </div>
 
+        {/* Note about custom time input */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg px-3 py-2 text-xs text-blue-700">
+          💡 プリセットにない時間帯は「自由入力」からHH:MM形式（例：11:15）で設定可能です。
+        </div>
+
         {/* Shift Grid */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-x-auto relative">
           <table className="text-xs min-w-full">
@@ -294,5 +329,38 @@ export default function ShiftsPage() {
         </div>
       </div>
     </DashboardLayout>
+  );
+}
+
+// Free-form time input component for shifts
+function CustomTimeInput({ initialStart, initialEnd, onSave }: { initialStart: string; initialEnd: string; onSave: (start: string, end: string) => void }) {
+  const [start, setStart] = useState(initialStart);
+  const [end, setEnd] = useState(initialEnd);
+  return (
+    <div className="border-t border-gray-200 mt-1 pt-1">
+      <p className="text-[10px] font-semibold text-gray-500 mb-1">自由入力</p>
+      <div className="flex items-center gap-1">
+        <input
+          type="time"
+          value={start}
+          onChange={e => setStart(e.target.value)}
+          className="w-[68px] border rounded px-1 py-0.5 text-[10px]"
+          placeholder="HH:MM"
+        />
+        <span className="text-[10px] text-gray-400">〜</span>
+        <input
+          type="time"
+          value={end}
+          onChange={e => setEnd(e.target.value)}
+          className="w-[68px] border rounded px-1 py-0.5 text-[10px]"
+          placeholder="HH:MM"
+        />
+      </div>
+      <button
+        onClick={() => onSave(start, end)}
+        disabled={!start || !end}
+        className="mt-1 w-full text-[10px] bg-green-600 hover:bg-green-700 text-white rounded py-1 disabled:opacity-50"
+      >保存</button>
+    </div>
   );
 }

@@ -55,6 +55,7 @@ export interface ShippingRecord {
   inspector: string;
   creator: string; // optional - empty means not yet completed
   createdAt: string;
+  carriedOver?: boolean; // true if this record was copied from previous day (prevents chain-carryover)
 }
 
 export interface ShiftEntry {
@@ -98,6 +99,9 @@ export interface HandoverRequest {
   reviewComment: string;
   createdAt: number;
   reviewedAt: number; // 0 until reviewed
+  completed?: boolean; // true when marked complete from HOME screen
+  completedAt?: number;
+  completedBy?: string; // member id who marked it complete
 }
 
 export interface MemberSummary {

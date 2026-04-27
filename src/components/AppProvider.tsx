@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady } from '@/lib/store';
+import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady, performUndo } from '@/lib/store';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
@@ -110,6 +110,32 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
     return () => unsubs.forEach(u => u());
   }, [firestoreReady]);
+
+  // Global Ctrl+Z / Cmd+Z undo handler
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      const isMod = e.ctrlKey || e.metaKey;
+      if (isMod && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        // Ignore if user is typing in an input/textarea (browser native undo)
+        const target = e.target as HTMLElement | null;
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+          return;
+        }
+        e.preventDefault();
+        const ok = performUndo();
+        if (ok) setDataVersion(v => v + 1);
+      }
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, []);
+
+  // Listen to undo-triggered data updates
+  useEffect(() => {
+    function handleUpdated() { setDataVersion(v => v + 1); }
+    window.addEventListener('schedule-data-updated', handleUpdated);
+    return () => window.removeEventListener('schedule-data-updated', handleUpdated);
+  }, []);
 
   const handleSetCurrentUserId = useCallback((id: string) => {
     setCurrentUserIdState(id);
