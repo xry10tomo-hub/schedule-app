@@ -292,8 +292,8 @@ export default function ShippingPage() {
             {/* 郵便局AM率（右上コンパクト） */}
             <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-1.5 text-xs flex items-center gap-3">
               <span className="font-bold text-rose-700">📮 郵便局AM率</span>
-              <span className="text-rose-600"><b>{yubinCnt}</b>/{totalCnt}件 <b>({yubinCntRate}%)</b></span>
-              <span className="text-rose-600"><b>{yubinPts}</b>/{totalPts}点 <b>({yubinPtsRate}%)</b></span>
+              <span className="text-rose-600"><b>{fmtNum(yubinCnt)}</b>/{fmtNum(totalCnt)}件 <b>({yubinCntRate}%)</b></span>
+              <span className="text-rose-600"><b>{fmtNum(yubinPts)}</b>/{fmtNum(totalPts)}点 <b>({yubinPtsRate}%)</b></span>
             </div>
           </div>
         </div>
@@ -463,13 +463,19 @@ export default function ShippingPage() {
           const renderRow = (r: ShippingRecord, isPlanSide: boolean) => {
             const isRyojitsu = (r.dayType || '当日') === '両日';
             const carrierClass = CARRIER_COLOR[r.carrier] || '';
+            // focus-within highlights the row when any cell is focused
+            // [&:has(td:focus-within)]:bg-amber-100 highlights the focused cell
+            const cellFocusClass = 'focus:ring-4 focus:ring-amber-400 focus:ring-offset-1 focus:bg-amber-100 focus:font-bold focus:outline-none transition-all';
             return (
-              <tr key={r.id} className={`border-b border-gray-50 text-center ${isPlanSide ? 'hover:bg-yellow-50/30' : 'bg-gray-100/40 hover:bg-gray-200/60'}`}>
+              <tr
+                key={r.id}
+                className={`border-b border-gray-50 text-center focus-within:bg-amber-50 focus-within:ring-2 focus-within:ring-amber-300 ${isPlanSide ? 'hover:bg-yellow-50/30' : 'bg-gray-100/40 hover:bg-gray-200/60'}`}
+              >
                 <td className="px-1 py-2">
                   <select
                     value={r.carrier}
                     onChange={e => updateRecord(r.id, { carrier: e.target.value })}
-                    className={`w-full border rounded px-1 py-1 text-xs text-center ${carrierClass}`}
+                    className={`w-full border rounded px-1 py-1 text-xs text-center ${carrierClass} ${cellFocusClass}`}
                   >
                     <option value="" className="bg-white text-gray-800">選択</option>
                     {CARRIERS.map(c => <option key={c} value={c} className="bg-white text-gray-800">{c}</option>)}
@@ -479,7 +485,7 @@ export default function ShippingPage() {
                   <select
                     value={r.dayType || '当日'}
                     onChange={e => updateRecord(r.id, { dayType: e.target.value })}
-                    className={`w-full rounded px-1 py-1 text-xs text-center ${isRyojitsu ? 'border-2 border-red-500 text-red-600 font-bold bg-transparent' : 'border'}`}
+                    className={`w-full rounded px-1 py-1 text-xs text-center ${isRyojitsu ? 'border-2 border-red-500 text-red-600 font-bold bg-transparent' : 'border'} ${cellFocusClass}`}
                   >
                     {DAY_TYPES.map(d => <option key={d} value={d} className="text-gray-800 bg-white">{d}</option>)}
                   </select>
@@ -490,14 +496,14 @@ export default function ShippingPage() {
                     value={r.points}
                     min={0}
                     onChange={e => updateRecord(r.id, { points: Number(e.target.value) })}
-                    className="w-full border rounded px-1 py-1 text-xs text-center"
+                    className={`w-full border rounded px-1 py-1 text-xs text-center ${cellFocusClass}`}
                   />
                 </td>
                 <td className="px-1 py-2">
                   <select
                     value={r.creator}
                     onChange={e => updateRecord(r.id, { creator: e.target.value })}
-                    className="w-full border rounded px-1 py-1 text-xs text-center"
+                    className={`w-full border rounded px-1 py-1 text-xs text-center ${cellFocusClass}`}
                   >
                     <option value="">未入力</option>
                     {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
@@ -507,7 +513,7 @@ export default function ShippingPage() {
                   <select
                     value={r.inspector}
                     onChange={e => updateRecord(r.id, { inspector: e.target.value })}
-                    className="w-full border rounded px-1 py-1 text-xs text-center"
+                    className={`w-full border rounded px-1 py-1 text-xs text-center ${cellFocusClass}`}
                   >
                     <option value="">選択</option>
                     {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
@@ -579,7 +585,7 @@ export default function ShippingPage() {
               <div className="bg-white rounded-xl shadow-sm border-2 border-yellow-200 overflow-hidden">
                 <div className="bg-yellow-100 border-b border-yellow-200 px-4 py-2 flex items-center justify-between">
                   <h3 className="text-sm font-bold text-yellow-800 flex items-center gap-2">
-                    📋 予定 <span className="text-[10px] bg-yellow-200 text-yellow-800 rounded-full px-2 py-0.5">{planRecords.length}件 / {planPts}点</span>
+                    📋 予定 <span className="text-[10px] bg-yellow-200 text-yellow-800 rounded-full px-2 py-0.5">{fmtNum(planRecords.length)}件 / {fmtNum(planPts)}点</span>
                   </h3>
                 </div>
                 <div className="overflow-x-auto">
@@ -599,7 +605,7 @@ export default function ShippingPage() {
               <div className="bg-white rounded-xl shadow-sm border-2 border-emerald-200 overflow-hidden">
                 <div className="bg-emerald-100 border-b border-emerald-200 px-4 py-2 flex items-center justify-between">
                   <h3 className="text-sm font-bold text-emerald-800 flex items-center gap-2">
-                    ✅ 実績 <span className="text-[10px] bg-emerald-200 text-emerald-800 rounded-full px-2 py-0.5">{doneRecords.length}件 / {donePts}点</span>
+                    ✅ 実績 <span className="text-[10px] bg-emerald-200 text-emerald-800 rounded-full px-2 py-0.5">{fmtNum(doneRecords.length)}件 / {fmtNum(donePts)}点</span>
                   </h3>
                   <span className="text-[10px] text-emerald-700">作成者を入力すると移動します</span>
                 </div>

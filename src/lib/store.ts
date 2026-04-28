@@ -31,7 +31,7 @@ export const DEFAULT_MEMBERS: Member[] = [
 
 // Task categories for grouping in dropdowns
 export const TASK_CATEGORIES = [
-  'LINE', '営業', '査定', '販売', '社内', '売却', '補助', '配信', 'タグ', '集計データ更新', 'OL', 'その他',
+  'LINE', '営業', '査定', '販売', '社内', '売却', '補助', '配信準備', 'タグ', '集計データ更新', 'OL', 'その他',
 ] as const;
 
 // Category-based color mapping
@@ -39,12 +39,12 @@ export const TASK_CATEGORIES = [
 export const CATEGORY_COLORS: Record<string, string[]> = {
   'LINE':           ['#16a34a', '#22c55e', '#4ade80', '#15803d'],  // 緑系
   '営業':           ['#ea580c', '#f97316', '#fb923c', '#c2410c'],  // オレンジ系
-  '査定':           ['#1e3a5f', '#93c5fd', '#1d4ed8', '#bfdbfe', '#2563eb', '#dbeafe', '#3b82f6', '#60a5fa'],  // 青系（濃淡交互）
+  '査定':           ['#1e3a5f', '#93c5fd', '#1d4ed8', '#0c4a6e', '#2563eb', '#dbeafe', '#3b82f6', '#60a5fa'],  // 青系（濃淡交互、下書きは濃いティール青で区別）
   '販売':           ['#dc2626', '#ef4444', '#f87171', '#b91c1c', '#fca5a5', '#991b1b', '#f43f5e', '#e11d48', '#fb7185', '#be123c', '#fda4af', '#9f1239', '#e879a4', '#c026d3', '#a855f7', '#d946ef', '#db2777', '#ec4899', '#f472b6', '#be185d', '#a21caf', '#7c3aed', '#6d28d9', '#8b5cf6', '#c084fc', '#a78bfa', '#7e22ce'],  // 赤系 (many shades for many tasks)
   '社内':           ['#6b7280', '#9ca3af', '#4b5563', '#d1d5db', '#374151', '#a8a29e', '#78716c', '#57534e'],  // グレー系
   '売却':           ['#7c3aed', '#8b5cf6', '#a78bfa', '#6d28d9'],  // 紫系
   '補助':           ['#ca8a04', '#eab308', '#facc15', '#a16207'],  // 黄色系
-  '配信':           ['#0d9488', '#14b8a6', '#2dd4bf', '#0f766e'],  // ティール系
+  '配信準備':       ['#0d9488', '#14b8a6', '#2dd4bf', '#0f766e'],  // ティール系
   'タグ':           ['#be185d', '#ec4899', '#f472b6', '#9d174d'],  // ピンク系
   '集計データ更新':  ['#4338ca', '#6366f1', '#818cf8', '#3730a3', '#a5b4fc', '#312e81'],  // インディゴ系
   'OL':             ['#0e7490', '#06b6d4', '#22d3ee', '#155e75'],  // シアン系
@@ -97,8 +97,8 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
   { id: 'sell-8', name: '【販売】差別・鑑定依頼', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-9', name: '【販売】アプレ返却対応', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-10', name: '【販売】計算書読込', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
-  { id: 'sell-11', name: '【販売】シッピング', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 15 },
-  { id: 'sell-12', name: '【販売】バク成約・上がり', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-28', name: '【販売】オークション売上入力', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-12', name: '【販売】パク依頼・上がり', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-13', name: '【販売】高橋買取依頼・上がり', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-14', name: '【販売】アクセサリー製品化', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-15', name: '【販売】NJ予約電話', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 5 },
@@ -133,10 +133,10 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
   { id: 'assist-2', name: '【補助】返送', category: '補助', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'assist-3', name: '【補助】相場更新', category: '補助', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 15 },
   { id: 'assist-4', name: '【補助】ファイル移動', category: '補助', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 5 },
-  // 配信
-  { id: 'delivery-1', name: '【配信】エメパス配信・毎月1日', category: '配信', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
-  { id: 'delivery-2', name: '【配信】エメパス配信・中旬', category: '配信', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
-  { id: 'delivery-3', name: '【配信】エメパス配信・月末', category: '配信', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  // 配信準備
+  { id: 'delivery-1', name: '【配信準備】月初', category: '配信準備', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'delivery-2', name: '【配信準備】中旬', category: '配信準備', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'delivery-3', name: '【配信準備】下旬', category: '配信準備', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
   // タグ
   { id: 'tag-1', name: '【タグ】エメパスタグ付け', category: 'タグ', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'tag-2', name: '【タグ】画像査定優先タグ付け', category: 'タグ', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
@@ -160,7 +160,8 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
   { id: 'other-7', name: '【その他】教育', category: 'その他', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
   { id: 'other-8', name: '【その他】ゴミ捨て', category: 'その他', defaultPointsPerUnit: 0, estimatedMinutesPerUnit: 10 },
   { id: 'other-9', name: '【他】掃除', category: 'その他', defaultPointsPerUnit: 0, estimatedMinutesPerUnit: 15 },
-  { id: 'other-10', name: '【その他】メルバー確認', category: 'その他', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'other-10', name: '【その他】メルベーユ確認', category: 'その他', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'other-12', name: '【その他】スマブラ', category: 'その他', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
   { id: 'other-11', name: '【その他】日報', category: 'その他', defaultPointsPerUnit: 0, estimatedMinutesPerUnit: 10 },
 ];
 
@@ -453,6 +454,157 @@ export function getTaskDefinitions(): TaskDefinition[] {
 }
 export function setTaskDefinitions(tasks: TaskDefinition[]) {
   setToStorage(STORAGE_KEYS.tasks, tasks);
+}
+
+// Migration: rename old task names to new ones in stored data
+// Runs once on app start (idempotent - safe to re-run)
+export const TASK_NAME_RENAMES: Record<string, string> = {
+  '【配信】エメパス配信・毎月1日': '【配信準備】月初',
+  '【配信】エメパス配信・中旬': '【配信準備】中旬',
+  '【配信】エメパス配信・月末': '【配信準備】下旬',
+  '【販売】エメパス製品化': '【販売】エメキン製品化',
+  '【販売】アクヒリ一製品化': '【販売】アクセサリー製品化',
+  '【販売】計算書転記': '【販売】計算書読込',
+  '【販売】バク成約・上がり': '【販売】パク依頼・上がり',
+  '【その他】メルバー確認': '【その他】メルベーユ確認',
+};
+// Tasks to be removed (will be filtered out of TaskDefinitions on migration)
+export const TASK_NAMES_TO_REMOVE: string[] = [
+  '【販売】シッピング',
+];
+export const CATEGORY_RENAMES: Record<string, string> = {
+  '配信': '配信準備',
+};
+
+export function runTaskMigration(): boolean {
+  if (typeof window === 'undefined') return false;
+  const MIGRATION_KEY = 'schedule_task_rename_migration_v2';
+  if (localStorage.getItem(MIGRATION_KEY) === 'done') return false;
+  let changed = false;
+
+  // 1. Update TaskDefinitions: rename, remove deleted, add new
+  const defs = getTaskDefinitions();
+  let newDefs = defs.map(d => {
+    const newName = TASK_NAME_RENAMES[d.name] || d.name;
+    const newCategory = CATEGORY_RENAMES[d.category] || d.category;
+    if (newName !== d.name || newCategory !== d.category) {
+      changed = true;
+      return { ...d, name: newName, category: newCategory };
+    }
+    return d;
+  });
+  // Remove deleted tasks
+  const beforeRemoveCount = newDefs.length;
+  newDefs = newDefs.filter(d => !TASK_NAMES_TO_REMOVE.includes(d.name));
+  if (newDefs.length !== beforeRemoveCount) changed = true;
+  // Add any DEFAULT_TASKS that aren't already present (new additions)
+  const existingNames = new Set(newDefs.map(d => d.name));
+  for (const def of DEFAULT_TASKS) {
+    if (!existingNames.has(def.name)) {
+      newDefs.push(def);
+      changed = true;
+    }
+  }
+  if (changed) setTaskDefinitions(newDefs);
+
+  // 2. Update DailyTasks
+  const dailyTasks = getDailyTasks();
+  const newDaily = dailyTasks.map(t => {
+    const newName = TASK_NAME_RENAMES[t.taskName];
+    if (newName) { changed = true; return { ...t, taskName: newName }; }
+    return t;
+  });
+  if (newDaily.some((t, i) => t.taskName !== dailyTasks[i].taskName)) {
+    setDailyTasks(newDaily);
+  }
+
+  // 3. Update MonthlySchedules
+  const ms = getMonthlySchedules();
+  const newMs = ms.map(s => {
+    const newName = TASK_NAME_RENAMES[s.taskName];
+    if (newName) { changed = true; return { ...s, taskName: newName }; }
+    return s;
+  });
+  if (newMs.some((s, i) => s.taskName !== ms[i].taskName)) {
+    setMonthlySchedules(newMs);
+  }
+
+  // 4. Update Timeline (planned)
+  const tl = getTimelineBlocks();
+  let tlChanged = false;
+  const newTl: typeof tl = {};
+  for (const [date, members] of Object.entries(tl)) {
+    newTl[date] = {};
+    for (const [memberId, blocks] of Object.entries(members)) {
+      newTl[date][memberId] = {};
+      for (const [block, taskName] of Object.entries(blocks)) {
+        const renamed = TASK_NAME_RENAMES[taskName];
+        if (renamed) { tlChanged = true; newTl[date][memberId][block] = renamed; }
+        else newTl[date][memberId][block] = taskName;
+      }
+    }
+  }
+  if (tlChanged) { setTimelineBlocks(newTl); changed = true; }
+
+  // 5. Update Actual Timeline
+  const atl = getActualTimelineBlocks();
+  let atlChanged = false;
+  const newAtl: typeof atl = {};
+  for (const [date, members] of Object.entries(atl)) {
+    newAtl[date] = {};
+    for (const [memberId, blocks] of Object.entries(members)) {
+      newAtl[date][memberId] = {};
+      for (const [block, taskName] of Object.entries(blocks)) {
+        const renamed = TASK_NAME_RENAMES[taskName];
+        if (renamed) { atlChanged = true; newAtl[date][memberId][block] = renamed; }
+        else newAtl[date][memberId][block] = taskName;
+      }
+    }
+  }
+  if (atlChanged) { setActualTimelineBlocks(newAtl); changed = true; }
+
+  // 6. Update FixedTasks
+  const fixedT = getFixedTasks();
+  const newFixed = fixedT.map(n => TASK_NAME_RENAMES[n] || n);
+  if (newFixed.some((n, i) => n !== fixedT[i])) {
+    setFixedTasks(newFixed); changed = true;
+  }
+
+  // 7. Update FixedTaskDefaults
+  const fixedDefs = getFixedTaskDefaults();
+  const newFixedDefs: typeof fixedDefs = {};
+  let fixedDefsChanged = false;
+  for (const [name, val] of Object.entries(fixedDefs)) {
+    const renamed = TASK_NAME_RENAMES[name];
+    if (renamed) { fixedDefsChanged = true; newFixedDefs[renamed] = val; }
+    else newFixedDefs[name] = val;
+  }
+  if (fixedDefsChanged) { setFixedTaskDefaults(newFixedDefs); changed = true; }
+
+  // 8. Update TaskAssignments
+  const ta = getTaskAssignments();
+  const newTa: typeof ta = {};
+  let taChanged = false;
+  for (const [name, val] of Object.entries(ta)) {
+    const renamed = TASK_NAME_RENAMES[name];
+    if (renamed) { taChanged = true; newTa[renamed] = val; }
+    else newTa[name] = val;
+  }
+  if (taChanged) { setTaskAssignments(newTa); changed = true; }
+
+  // 9. Update Handovers
+  const handovers = getHandovers();
+  const newHandovers = handovers.map(h => {
+    const renamed = TASK_NAME_RENAMES[h.taskName];
+    if (renamed) { changed = true; return { ...h, taskName: renamed }; }
+    return h;
+  });
+  if (newHandovers.some((h, i) => h.taskName !== handovers[i].taskName)) {
+    setHandovers(newHandovers);
+  }
+
+  localStorage.setItem(MIGRATION_KEY, 'done');
+  return changed;
 }
 
 export function getTaskResources(): TaskResource[] {

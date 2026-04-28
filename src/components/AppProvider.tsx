@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady, performUndo } from '@/lib/store';
+import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady, performUndo, runTaskMigration } from '@/lib/store';
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
@@ -85,6 +85,18 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
       // Enable Firestore writes now that we have loaded remote data
       setFirestoreSyncReady(true);
+
+      // Run one-time task name migration (renames old task names → new)
+      try {
+        const migrated = runTaskMigration();
+        if (migrated) {
+          console.log('Task name migration applied');
+          setDataVersion(v => v + 1);
+        }
+      } catch (err) {
+        console.error('Task migration error:', err);
+      }
+
       setLoading(false);
     }
     initFirestore();

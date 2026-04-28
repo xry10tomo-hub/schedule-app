@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, getCategoryTaskColor, CATEGORY_COLORS, TASK_CATEGORIES, getFixedTasks, getFixedTaskDefaults, getTaskAssignments, setTaskAssignments, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, getCategoryTaskColor, CATEGORY_COLORS, TASK_CATEGORIES, getFixedTasks, getFixedTaskDefaults, getTaskAssignments, setTaskAssignments, DEFAULT_TASKS, fmtNum } from '@/lib/store';
 import type { TaskAssignmentConfig } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
@@ -612,31 +612,31 @@ export default function DailyPage() {
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <div className="bg-white rounded-lg px-4 py-3 border border-green-200 shadow-sm">
             <span className="text-xs text-green-600">本日のリソース</span>
-            <p className="text-lg font-bold text-green-700">{availableResourceMinutes}分 ({(availableResourceMinutes / 60).toFixed(1)}h)</p>
-            <p className="text-[10px] text-gray-400">{shiftsForDate.length}名出勤</p>
+            <p className="text-lg font-bold text-green-700">{fmtNum(availableResourceMinutes)}分 ({(availableResourceMinutes / 60).toFixed(1)}h)</p>
+            <p className="text-[10px] text-gray-400">{fmtNum(shiftsForDate.length)}名出勤</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-orange-200 shadow-sm">
             <span className="text-xs text-orange-600">必要時間合計</span>
-            <p className="text-lg font-bold text-orange-700">{totalRequiredMinutes}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</p>
+            <p className="text-lg font-bold text-orange-700">{fmtNum(totalRequiredMinutes)}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-gray-200 shadow-sm">
             <span className="text-xs text-gray-500">リソース差分</span>
             <p className={`text-lg font-bold ${resourceBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              {resourceBalance >= 0 ? '+' : ''}{resourceBalance}分
+              {resourceBalance >= 0 ? '+' : ''}{fmtNum(resourceBalance)}分
             </p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-blue-200 shadow-sm">
             <span className="text-xs text-blue-600">実績合計</span>
-            <p className="text-lg font-bold text-blue-700">{totalActualMinutes}分 ({(totalActualMinutes / 60).toFixed(1)}h)</p>
+            <p className="text-lg font-bold text-blue-700">{fmtNum(totalActualMinutes)}分 ({(totalActualMinutes / 60).toFixed(1)}h)</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-purple-200 shadow-sm">
             <span className="text-xs text-purple-600">画像査定（予定）</span>
-            <p className="text-lg font-bold text-purple-700">{imageAssessmentPlannedPoints}点</p>
+            <p className="text-lg font-bold text-purple-700">{fmtNum(imageAssessmentPlannedPoints)}点</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-rose-200 shadow-sm">
             <span className="text-xs text-rose-600">実査定</span>
-            <p className="text-sm font-bold text-rose-700">点数: {realAssessmentPoints}点</p>
-            <p className="text-sm font-bold text-rose-700">件数: {realAssessmentCount}件</p>
+            <p className="text-sm font-bold text-rose-700">点数: {fmtNum(realAssessmentPoints)}点</p>
+            <p className="text-sm font-bold text-rose-700">件数: {fmtNum(realAssessmentCount)}件</p>
           </div>
         </div>
 
@@ -649,20 +649,20 @@ export default function DailyPage() {
                 <div className="flex justify-between mt-1">
                   <div>
                     <p className="text-[10px] text-green-600">予定</p>
-                    <p className="text-sm font-bold text-green-700">{ms.plannedMinutes}分</p>
+                    <p className="text-sm font-bold text-green-700">{fmtNum(ms.plannedMinutes)}分</p>
                   </div>
                   <div>
                     <p className="text-[10px] text-blue-600">実績</p>
-                    <p className="text-sm font-bold text-blue-700">{ms.actualMinutes}分</p>
+                    <p className="text-sm font-bold text-blue-700">{fmtNum(ms.actualMinutes)}分</p>
                   </div>
                   <div>
                     <p className="text-[10px] text-gray-500">残り</p>
                     <p className={`text-sm font-bold ${ms.remainingMinutes >= 0 ? 'text-gray-600' : 'text-red-600'}`}>
-                      {ms.remainingMinutes}分
+                      {fmtNum(ms.remainingMinutes)}分
                     </p>
                   </div>
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1">シフト: {ms.shiftMinutes}分</p>
+                <p className="text-[10px] text-gray-400 mt-1">シフト: {fmtNum(ms.shiftMinutes)}分</p>
               </div>
             ))}
           </div>
@@ -676,7 +676,7 @@ export default function DailyPage() {
         )}
         {tasks.some(t => t.comment === '引き継ぎ') && (
           <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-2 text-sm text-amber-700">
-            🔄 引き継ぎで承認された業務が反映されています（{tasks.filter(t => t.comment === '引き継ぎ').length}件）
+            🔄 引き継ぎで承認された業務が反映されています（{fmtNum(tasks.filter(t => t.comment === '引き継ぎ').length)}件）
           </div>
         )}
 
@@ -734,7 +734,7 @@ export default function DailyPage() {
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">必要時間（分）</label>
                 <div className="w-full border rounded-lg px-3 py-2 text-sm bg-gray-50 text-gray-700 font-bold">
-                  {formRequiredCount * formMinutesPerUnit}分
+                  {fmtNum(formRequiredCount * formMinutesPerUnit)}分
                 </div>
               </div>
             </div>
@@ -815,7 +815,7 @@ export default function DailyPage() {
                             <input type="number" value={t.minutesPerUnit || 0} onChange={e => handleUpdateField(t.id, 'minutesPerUnit', Number(e.target.value))} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
                           </td>
                           <td className="px-3 py-3">
-                            <span className="font-bold text-orange-700">{t.plannedMinutes}分</span>
+                            <span className="font-bold text-orange-700">{fmtNum(t.plannedMinutes)}分</span>
                           </td>
                           <td className="px-3 py-3 relative">
                             <button
@@ -825,7 +825,7 @@ export default function DailyPage() {
                               {memberNames.length === 0 ? (
                                 <span className="text-gray-400">未設定</span>
                               ) : (
-                                <span className="text-gray-700">{memberNames.length}名: {memberNames.slice(0, 2).join('、')}{memberNames.length > 2 ? `他${memberNames.length - 2}` : ''}</span>
+                                <span className="text-gray-700">{fmtNum(memberNames.length)}名: {memberNames.slice(0, 2).join('、')}{memberNames.length > 2 ? `他${memberNames.length - 2}` : ''}</span>
                               )}
                               <span className="ml-auto text-gray-400 text-[10px]">▼</span>
                             </button>
@@ -900,7 +900,7 @@ export default function DailyPage() {
                       <td className="px-3 py-3 text-gray-700">合計</td>
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>
-                      <td className="px-3 py-3 text-orange-700">{totalRequiredMinutes}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-3 py-3 text-orange-700">{fmtNum(totalRequiredMinutes)}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>
@@ -981,24 +981,24 @@ export default function DailyPage() {
                             </div>
                           </td>
                           <td className="px-4 py-3">
-                            <span className="text-xs text-gray-500">{plannedMinutes}分</span>
+                            <span className="text-xs text-gray-500">{fmtNum(plannedMinutes)}分</span>
                           </td>
                           <td className="px-4 py-3">
-                            <span className="font-bold text-blue-700 text-xs">{actualMinutes}分</span>
+                            <span className="font-bold text-blue-700 text-xs">{fmtNum(actualMinutes)}分</span>
                           </td>
                           <td className="px-4 py-3">
                             <span className={`text-xs font-semibold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                              {gap > 0 ? '+' : ''}{gap}分
+                              {gap > 0 ? '+' : ''}{fmtNum(gap)}分
                             </span>
                           </td>
                           <td className="px-4 py-3">
                             {perfConfig?.count ? (
-                              <span className="text-xs font-bold text-purple-700">{totalCount}件</span>
+                              <span className="text-xs font-bold text-purple-700">{fmtNum(totalCount)}件</span>
                             ) : <span className="text-xs text-gray-300">-</span>}
                           </td>
                           <td className="px-4 py-3">
                             {perfConfig?.points ? (
-                              <span className="text-xs font-bold text-purple-700">{totalPoints}点</span>
+                              <span className="text-xs font-bold text-purple-700">{fmtNum(totalPoints)}点</span>
                             ) : <span className="text-xs text-gray-300">-</span>}
                           </td>
                           <td className="px-4 py-3">
@@ -1017,13 +1017,13 @@ export default function DailyPage() {
                                 return (
                                   <div key={memberId} className="flex items-center gap-1 flex-wrap">
                                     <span className="text-[10px] px-1.5 py-0.5 bg-blue-50 text-blue-700 rounded">
-                                      {member?.name || memberId}: {mins}分
+                                      {member?.name || memberId}: {fmtNum(mins)}分
                                     </span>
                                     {perfConfig && memberPerf && (
                                       <span className="text-[10px] text-purple-600">
-                                        {perfConfig.count && `${memberPerf.count}件`}
+                                        {perfConfig.count && `${fmtNum(memberPerf.count)}件`}
                                         {perfConfig.count && perfConfig.points && ' / '}
-                                        {perfConfig.points && `${memberPerf.points}点`}
+                                        {perfConfig.points && `${fmtNum(memberPerf.points)}点`}
                                       </span>
                                     )}
                                     {perfConfig && memberSpeed !== null && (
@@ -1044,11 +1044,11 @@ export default function DailyPage() {
                   {(tasks.length > 0 || Object.keys(actualTimelineAggregation).length > 0) && (
                     <tr className="bg-blue-50 font-bold">
                       <td className="px-4 py-3 text-gray-700">合計</td>
-                      <td className="px-4 py-3 text-gray-700">{totalRequiredMinutes}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
-                      <td className="px-4 py-3 text-blue-700">{totalActualMinutes}分 ({(totalActualMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-4 py-3 text-gray-700">{fmtNum(totalRequiredMinutes)}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-4 py-3 text-blue-700">{fmtNum(totalActualMinutes)}分 ({(totalActualMinutes / 60).toFixed(1)}h)</td>
                       <td className="px-4 py-3">
                         <span className={`${(totalActualMinutes - totalRequiredMinutes) > 0 ? 'text-red-500' : (totalActualMinutes - totalRequiredMinutes) < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                          {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{totalActualMinutes - totalRequiredMinutes}分
+                          {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{fmtNum(totalActualMinutes - totalRequiredMinutes)}分
                         </span>
                       </td>
                       <td className="px-4 py-3" colSpan={4}></td>
@@ -1224,16 +1224,16 @@ export default function DailyPage() {
                       </div>
                       <div className="text-center">
                         <p className="text-[10px] text-gray-500 mb-1">予定時間</p>
-                        <p className="text-2xl font-bold text-gray-700">{totalRequiredMinutes}分</p>
+                        <p className="text-2xl font-bold text-gray-700">{fmtNum(totalRequiredMinutes)}分</p>
                       </div>
                       <div className="text-center">
                         <p className="text-[10px] text-gray-500 mb-1">実績時間</p>
-                        <p className="text-2xl font-bold text-blue-700">{totalActualMinutes}分</p>
+                        <p className="text-2xl font-bold text-blue-700">{fmtNum(totalActualMinutes)}分</p>
                       </div>
                       <div className="text-center">
                         <p className="text-[10px] text-gray-500 mb-1">差分</p>
                         <p className={`text-2xl font-bold ${(totalActualMinutes - totalRequiredMinutes) > 0 ? 'text-red-500' : (totalActualMinutes - totalRequiredMinutes) < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                          {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{totalActualMinutes - totalRequiredMinutes}分
+                          {(totalActualMinutes - totalRequiredMinutes) > 0 ? '+' : ''}{fmtNum(totalActualMinutes - totalRequiredMinutes)}分
                         </p>
                       </div>
                     </div>
@@ -1294,16 +1294,16 @@ export default function DailyPage() {
                                     <span>{taskName}</span>
                                   </div>
                                 </td>
-                                <td className="px-3 py-2 text-right text-gray-600">{planMinutes}分</td>
-                                <td className="px-3 py-2 text-right font-bold text-blue-700">{actualMinutes}分</td>
+                                <td className="px-3 py-2 text-right text-gray-600">{fmtNum(planMinutes)}分</td>
+                                <td className="px-3 py-2 text-right font-bold text-blue-700">{fmtNum(actualMinutes)}分</td>
                                 <td className={`px-3 py-2 text-right font-bold ${gap > 0 ? 'text-red-500' : gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                                  {gap > 0 ? '+' : ''}{gap}分
+                                  {gap > 0 ? '+' : ''}{fmtNum(gap)}分
                                 </td>
                                 <td className="px-3 py-2 text-right font-bold text-purple-700">
-                                  {config.count ? `${totalCount}件` : '-'}
+                                  {config.count ? `${fmtNum(totalCount)}件` : '-'}
                                 </td>
                                 <td className="px-3 py-2 text-right font-bold text-purple-700">
-                                  {config.points ? `${totalPoints}点` : '-'}
+                                  {config.points ? `${fmtNum(totalPoints)}点` : '-'}
                                 </td>
                                 <td className="px-3 py-2 text-right font-bold text-green-700">
                                   {avgSpeed !== null ? `${avgSpeed}分/件` : '-'}
@@ -1313,9 +1313,9 @@ export default function DailyPage() {
                                     {memberPerfs.map(mp => (
                                       <div key={mp.memberId} className="flex items-center gap-1 flex-wrap text-[10px]">
                                         <span className="text-gray-700 font-medium">{mp.name}</span>
-                                        <span className="text-blue-600">{mp.minutes}分</span>
-                                        {config.count && <span className="text-purple-600">{mp.count}件</span>}
-                                        {config.points && <span className="text-purple-600">{mp.points}点</span>}
+                                        <span className="text-blue-600">{fmtNum(mp.minutes)}分</span>
+                                        {config.count && <span className="text-purple-600">{fmtNum(mp.count)}件</span>}
+                                        {config.points && <span className="text-purple-600">{fmtNum(mp.points)}点</span>}
                                         {mp.speed !== null && <span className="text-green-600">{mp.speed}分/件</span>}
                                       </div>
                                     ))}
@@ -1348,13 +1348,13 @@ export default function DailyPage() {
                                 <span className="text-xs font-medium text-gray-800">{tn}</span>
                               </div>
                               <div className="flex items-center gap-3">
-                                <span className="text-xs text-orange-700 font-bold">{actual?.totalMinutes || 0}分</span>
+                                <span className="text-xs text-orange-700 font-bold">{fmtNum(actual?.totalMinutes || 0)}分</span>
                                 <div className="flex gap-1">
                                   {Object.entries(actual?.members || {}).map(([mid, mins]) => {
                                     const member = members.find(m => m.id === mid);
                                     return (
                                       <span key={mid} className="text-[10px] px-1.5 py-0.5 bg-orange-100 text-orange-700 rounded">
-                                        {member?.name || mid}: {mins}分
+                                        {member?.name || mid}: {fmtNum(mins)}分
                                       </span>
                                     );
                                   })}
@@ -1385,9 +1385,9 @@ export default function DailyPage() {
                               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 mb-3">
                                 <p className="text-xs font-bold text-gray-800">{mg.member.name}</p>
                                 <div className="flex gap-3 text-[10px]">
-                                  <span className="px-2 py-0.5 bg-gray-100 rounded">シフト: {mg.shiftMinutes}分</span>
-                                  <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded">予定: {mg.plannedMinutes}分</span>
-                                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded">実績: {mg.actualMinutes}分</span>
+                                  <span className="px-2 py-0.5 bg-gray-100 rounded">シフト: {fmtNum(mg.shiftMinutes)}分</span>
+                                  <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded">予定: {fmtNum(mg.plannedMinutes)}分</span>
+                                  <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded">実績: {fmtNum(mg.actualMinutes)}分</span>
                                   <span className={`px-2 py-0.5 rounded ${planRate >= 90 && planRate <= 110 ? 'bg-green-100 text-green-700' : planRate >= 70 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
                                     達成率: {mg.plannedMinutes > 0 ? `${planRate}%` : '-'}
                                   </span>
@@ -1429,16 +1429,16 @@ export default function DailyPage() {
                                                 <span className="text-gray-700">{tg.taskName.replace(/^【[^】]+】/, '')}</span>
                                               </div>
                                             </td>
-                                            <td className="py-1 pr-3 text-right text-gray-600">{tg.planned}分</td>
-                                            <td className="py-1 pr-3 text-right text-blue-700 font-bold">{tg.actual}分</td>
+                                            <td className="py-1 pr-3 text-right text-gray-600">{fmtNum(tg.planned)}分</td>
+                                            <td className="py-1 pr-3 text-right text-blue-700 font-bold">{fmtNum(tg.actual)}分</td>
                                             <td className={`py-1 pr-3 text-right font-bold ${tg.gap > 0 ? 'text-red-500' : tg.gap < 0 ? 'text-green-500' : 'text-gray-400'}`}>
-                                              {tg.gap > 0 ? '+' : ''}{tg.gap}分
+                                              {tg.gap > 0 ? '+' : ''}{fmtNum(tg.gap)}分
                                             </td>
                                             <td className="py-1 pr-3 text-right text-purple-700 font-bold">
-                                              {perfCfg?.count && memberPerf ? `${memberPerf.count}件` : '-'}
+                                              {perfCfg?.count && memberPerf ? `${fmtNum(memberPerf.count)}件` : '-'}
                                             </td>
                                             <td className="py-1 pr-3 text-right text-purple-700 font-bold">
-                                              {perfCfg?.points && memberPerf ? `${memberPerf.points}点` : '-'}
+                                              {perfCfg?.points && memberPerf ? `${fmtNum(memberPerf.points)}点` : '-'}
                                             </td>
                                             <td className="py-1 text-right text-green-700 font-bold">
                                               {speed !== null ? `${speed}分/${speedUnit}` : '-'}
@@ -1616,7 +1616,7 @@ export default function DailyPage() {
                       })}
                     </div>
                     <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
-                      {totalMins}分
+                      {fmtNum(totalMins)}分
                     </div>
                   </div>
                 );
@@ -1676,10 +1676,10 @@ export default function DailyPage() {
                                 <span className="truncate">{taskName}</span>
                               </div>
                             </td>
-                            <td className="px-2 py-1 text-right text-gray-600">{planned}分</td>
-                            <td className="px-2 py-1 text-right text-blue-700 font-semibold">{timeline}分</td>
+                            <td className="px-2 py-1 text-right text-gray-600">{fmtNum(planned)}分</td>
+                            <td className="px-2 py-1 text-right text-blue-700 font-semibold">{fmtNum(timeline)}分</td>
                             <td className={`px-2 py-1 text-right font-bold ${gap === 0 ? 'text-green-600' : gap > 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                              {gap === 0 ? '±0' : (gap > 0 ? '+' : '')}{gap}分
+                              {gap === 0 ? '±0' : (gap > 0 ? '+' : '')}{fmtNum(gap)}分
                             </td>
                           </tr>
                         );
@@ -1690,10 +1690,10 @@ export default function DailyPage() {
                           {rows}
                           <tr className="bg-gray-50 font-bold">
                             <td className="px-2 py-1.5">合計</td>
-                            <td className="px-2 py-1.5 text-right text-gray-700">{totalPlanned}分</td>
-                            <td className="px-2 py-1.5 text-right text-blue-700">{totalTimeline}分</td>
+                            <td className="px-2 py-1.5 text-right text-gray-700">{fmtNum(totalPlanned)}分</td>
+                            <td className="px-2 py-1.5 text-right text-blue-700">{fmtNum(totalTimeline)}分</td>
                             <td className={`px-2 py-1.5 text-right ${totalGap === 0 ? 'text-green-600' : totalGap > 0 ? 'text-blue-600' : 'text-red-600'}`}>
-                              {totalGap === 0 ? '±0' : (totalGap > 0 ? '+' : '')}{totalGap}分
+                              {totalGap === 0 ? '±0' : (totalGap > 0 ? '+' : '')}{fmtNum(totalGap)}分
                             </td>
                           </tr>
                         </>
@@ -1717,7 +1717,7 @@ export default function DailyPage() {
                   return (
                     <div key={ms.member.id} className="bg-gray-50 rounded-lg p-3">
                       <p className="text-xs font-bold text-gray-700 mb-1">
-                        {ms.member.name}（予定 {ms.plannedMinutes}分 / 実績 {ms.actualMinutes}分）
+                        {ms.member.name}（予定 {fmtNum(ms.plannedMinutes)}分 / 実績 {fmtNum(ms.actualMinutes)}分）
                       </p>
                       <div className="space-y-1.5">
                         {Array.from(allTaskNames).sort().map(taskName => {
@@ -1732,16 +1732,16 @@ export default function DailyPage() {
                               <div className="flex items-center gap-2 text-[10px]">
                                 <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
                                 <span className="flex-1 text-gray-600 truncate">{taskName.replace(/^【[^】]+】/, '')}</span>
-                                <span className="text-gray-500">{plannedMins}分</span>
-                                <span className="font-bold text-blue-700">{actualMins}分</span>
+                                <span className="text-gray-500">{fmtNum(plannedMins)}分</span>
+                                <span className="font-bold text-blue-700">{fmtNum(actualMins)}分</span>
                               </div>
                               {perfConfig && perf && (perf.count > 0 || perf.points > 0) && (
                                 <div className="ml-5 flex items-center gap-2 text-[10px] mt-0.5">
                                   {perfConfig.count && perf.count > 0 && (
-                                    <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded font-semibold">{perf.count}件</span>
+                                    <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded font-semibold">{fmtNum(perf.count)}件</span>
                                   )}
                                   {perfConfig.points && perf.points > 0 && (
-                                    <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded font-semibold">{perf.points}点</span>
+                                    <span className="px-1.5 py-0.5 bg-purple-50 text-purple-700 rounded font-semibold">{fmtNum(perf.points)}点</span>
                                   )}
                                   {speed !== null && (
                                     <span className="px-1.5 py-0.5 bg-green-50 text-green-700 rounded font-semibold">{speed}分/件</span>

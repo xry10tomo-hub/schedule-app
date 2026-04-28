@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getActualPerformanceAll, getActualTimelineBlocks, getDaysInMonth, exportToCSV, getCategoryTaskColor, getFixedTasks } from '@/lib/store';
+import { useAppContext, getDailyTasks, getActualPerformanceAll, getActualTimelineBlocks, getTimelineBlocks, getShifts, getDaysInMonth, exportToCSV, getCategoryTaskColor, getFixedTasks, fmtNum } from '@/lib/store';
 import type { DailyTask } from '@/lib/types';
 
 type Metric = 'minutes' | 'count' | 'points' | 'speed';
@@ -60,8 +60,41 @@ export default function AdminPage() {
   const monthData = useMemo(() => {
     const allActualTl = getActualTimelineBlocks(); // date → memberId → blockIdx → taskName
     const allPerf = getActualPerformanceAll(); // date → memberId → taskName → {count, points}
-    return { allActualTl, allPerf };
+    const allPlanTl = getTimelineBlocks(); // date → memberId → blockIdx → taskName (planned)
+    const allShifts = getShifts(); // ShiftEntry[]
+    return { allActualTl, allPerf, allPlanTl, allShifts };
   }, [dataVersion]);
+
+  // Per-day total shift minutes (for 業務構成比 計算: 母数=本日のリソース)
+  const dayShiftTotals = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const s of monthData.allShifts) {
+      if (selectedMemberId && s.memberId !== selectedMemberId) continue;
+      if (!s.date.startsWith(monthStr)) continue;
+      const [sh, sm] = s.startTime.split(':').map(Number);
+      const [eh, em] = s.endTime.split(':').map(Number);
+      const mins = (eh * 60 + em) - (sh * 60 + sm);
+      out[s.date] = (out[s.date] || 0) + mins;
+    }
+    return out;
+  }, [monthData.allShifts, monthStr, selectedMemberId]);
+
+  // Per-task per-day planned timeline minutes (for 業務構成比)
+  const planTlMinsByTaskDay = useMemo(() => {
+    const out: Record<string, Record<number, number>> = {};
+    for (const [dateStr, members] of Object.entries(monthData.allPlanTl)) {
+      if (!dateStr.startsWith(monthStr)) continue;
+      const day = Number(dateStr.split('-')[2]);
+      for (const [memberId, blocks] of Object.entries(members)) {
+        if (selectedMemberId && memberId !== selectedMemberId) continue;
+        for (const tn of Object.values(blocks)) {
+          if (!out[tn]) out[tn] = {};
+          out[tn][day] = (out[tn][day] || 0) + 15;
+        }
+      }
+    }
+    return out;
+  }, [monthData.allPlanTl, monthStr, selectedMemberId]);
 
   // Compute matrix: row=taskName, col=day(1..daysInMonth), value=metric
   // Filtered by selectedMemberId (or all members if empty)
@@ -134,9 +167,9 @@ export default function AdminPage() {
 
   function formatCellByMetric(taskName: string, d: number, m: Metric): string {
     const cell = matrix.data[taskName]?.[d] || { minutes: 0, count: 0, points: 0 };
-    if (m === 'minutes') return cell.minutes > 0 ? `${cell.minutes}` : '';
-    if (m === 'count') return cell.count > 0 ? `${cell.count}` : '';
-    if (m === 'points') return cell.points > 0 ? `${cell.points}` : '';
+    if (m === 'minutes') return cell.minutes > 0 ? fmtNum(cell.minutes) : '';
+    if (m === 'count') return cell.count > 0 ? fmtNum(cell.count) : '';
+    if (m === 'points') return cell.points > 0 ? fmtNum(cell.points) : '';
     // speed
     const usePoint = POINTS_BASED_SPEED_TASKS.includes(taskName);
     const denom = usePoint ? cell.points : cell.count;
@@ -213,6 +246,7 @@ export default function AdminPage() {
   function handleExport() {
     const rows: Record<string, unknown>[] = [];
     matrix.taskNames.forEach(tn => {
+      // Existing 4 metrics
       METRIC_ORDER.forEach(m => {
         const row: Record<string, unknown> = { 業務名: tn, 指標: METRIC_LABELS[m] };
         for (let d = 1; d <= daysInMonth; d++) {
@@ -223,7 +257,43 @@ export default function AdminPage() {
         row['合計'] = totalVal;
         rows.push(row);
       });
+
+      // Additional: 業務構成比 (% of 本日のリソース) per day
+      // 構成比 = 予定タイムライン分(タスク) / シフト合計分(その日) × 100
+      const compositionRow: Record<string, unknown> = { 業務名: tn, 指標: '構成比(%)' };
+      let totalPlanMins = 0;
+      let totalShiftMins = 0;
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
+        const planMins = planTlMinsByTaskDay[tn]?.[d] || 0;
+        const shiftMins = dayShiftTotals[dateStr] || 0;
+        totalPlanMins += planMins;
+        totalShiftMins += shiftMins;
+        if (planMins > 0 && shiftMins > 0) {
+          const pct = Math.round((planMins / shiftMins) * 1000) / 10;
+          compositionRow[`${d}日`] = `${pct}%`;
+        } else {
+          compositionRow[`${d}日`] = '';
+        }
+      }
+      compositionRow['合計'] = totalShiftMins > 0
+        ? `${Math.round((totalPlanMins / totalShiftMins) * 1000) / 10}%`
+        : '';
+      rows.push(compositionRow);
     });
+
+    // Per-day "本日のリソース" reference row at bottom
+    const shiftRow: Record<string, unknown> = { 業務名: '【参考】本日のリソース', 指標: '分' };
+    let monthShiftTotal = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
+      const v = dayShiftTotals[dateStr] || 0;
+      shiftRow[`${d}日`] = v > 0 ? v : '';
+      monthShiftTotal += v;
+    }
+    shiftRow['合計'] = monthShiftTotal;
+    rows.push(shiftRow);
+
     exportToCSV(rows, `集計_${monthStr}.csv`);
   }
 
@@ -324,15 +394,15 @@ export default function AdminPage() {
         <div className="grid grid-cols-3 gap-3">
           <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
             <p className="text-xs text-blue-600 font-bold">月間 実績時間</p>
-            <p className="text-2xl font-bold text-blue-700">{grandTotal.minutes}<span className="text-sm">分</span> <span className="text-xs text-blue-500">({(grandTotal.minutes / 60).toFixed(1)}h)</span></p>
+            <p className="text-2xl font-bold text-blue-700">{fmtNum(grandTotal.minutes)}<span className="text-sm">分</span> <span className="text-xs text-blue-500">({(grandTotal.minutes / 60).toFixed(1)}h)</span></p>
           </div>
           <div className="bg-purple-50 border border-purple-200 rounded-xl p-4">
             <p className="text-xs text-purple-600 font-bold">月間 件数</p>
-            <p className="text-2xl font-bold text-purple-700">{grandTotal.count}<span className="text-sm">件</span></p>
+            <p className="text-2xl font-bold text-purple-700">{fmtNum(grandTotal.count)}<span className="text-sm">件</span></p>
           </div>
           <div className="bg-pink-50 border border-pink-200 rounded-xl p-4">
             <p className="text-xs text-pink-600 font-bold">月間 点数</p>
-            <p className="text-2xl font-bold text-pink-700">{grandTotal.points}<span className="text-sm">点</span></p>
+            <p className="text-2xl font-bold text-pink-700">{fmtNum(grandTotal.points)}<span className="text-sm">点</span></p>
           </div>
         </div>
 
@@ -381,7 +451,7 @@ export default function AdminPage() {
                           );
                         })}
                         <td className={`sticky right-0 border border-amber-200 px-2 py-1 text-center font-bold ${METRIC_BG[m]} ${METRIC_TEXT[m]}`}>
-                          {totalDisplay || ''}
+                          {totalDisplay ? (typeof totalDisplay === 'number' ? fmtNum(totalDisplay) : totalDisplay) : ''}
                         </td>
                       </tr>
                     );
@@ -400,11 +470,11 @@ export default function AdminPage() {
                       const ct = colTotal(d);
                       const val = m === 'minutes' ? ct.minutes : m === 'count' ? ct.count : ct.points;
                       return (
-                        <td key={d} className="border border-gray-200 px-1 py-1 text-center text-gray-800">{val || ''}</td>
+                        <td key={d} className="border border-gray-200 px-1 py-1 text-center text-gray-800">{val ? fmtNum(val) : ''}</td>
                       );
                     })}
                     <td className="sticky right-0 bg-amber-200 border border-amber-400 px-2 py-1 text-center font-bold text-amber-900">
-                      {m === 'minutes' ? grandTotal.minutes : m === 'count' ? grandTotal.count : grandTotal.points}
+                      {fmtNum(m === 'minutes' ? grandTotal.minutes : m === 'count' ? grandTotal.count : grandTotal.points)}
                     </td>
                   </tr>
                 ))}
@@ -433,9 +503,9 @@ export default function AdminPage() {
                         <span className="text-[10px] text-gray-400">({isEmployee ? '社員' : 'アルバイト'})</span>
                       </div>
                       <div className="flex gap-3 text-xs">
-                        <span className="text-blue-700"><b>{p.totalMinutes}</b>分 ({(p.totalMinutes/60).toFixed(1)}h)</span>
-                        <span className="text-purple-700"><b>{p.totalCount}</b>件</span>
-                        <span className="text-pink-700"><b>{p.totalPoints}</b>点</span>
+                        <span className="text-blue-700"><b>{fmtNum(p.totalMinutes)}</b>分 ({(p.totalMinutes/60).toFixed(1)}h)</span>
+                        <span className="text-purple-700"><b>{fmtNum(p.totalCount)}</b>件</span>
+                        <span className="text-pink-700"><b>{fmtNum(p.totalPoints)}</b>点</span>
                       </div>
                     </div>
                     <div className="space-y-1">

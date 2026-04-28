@@ -247,9 +247,10 @@ function DayCell({
 
       {/* Add form dropdown - flips upward for days in last rows to avoid being clipped */}
       {showForm && (
-        <div className={`absolute z-50 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-56 space-y-2 ${
+        <div className={`absolute z-50 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-64 space-y-2 ${
           day >= 22 ? 'bottom-full mb-1' : 'top-full mt-1'
         }`}>
+          <p className="text-[10px] font-semibold text-gray-500">プルダウンから選択</p>
           <select value={formTask} onChange={e => setFormTask(e.target.value)} className="w-full text-xs border rounded px-2 py-1.5">
             <option value="">業務名を選択</option>
             <option value="固定業務" className="font-bold">★ 固定業務（一括追加）</option>
@@ -262,6 +263,15 @@ function DayCell({
               );
             })}
           </select>
+          <p className="text-[10px] font-semibold text-gray-500 pt-1 border-t border-gray-100">または直接入力</p>
+          <input
+            type="text"
+            value={formTask}
+            onChange={e => setFormTask(e.target.value)}
+            placeholder="業務名を入力（例: 【販売】特別案件）"
+            className="w-full text-xs border rounded px-2 py-1.5"
+            onKeyDown={e => { if (e.key === 'Enter' && formTask) handleSubmit(); }}
+          />
           <div className="flex gap-1">
             <button onClick={handleSubmit} disabled={!formTask} className="flex-1 bg-green-600 text-white text-xs rounded px-2 py-1 disabled:opacity-50">追加</button>
             <button onClick={() => setShowForm(false)} className="flex-1 bg-gray-200 text-gray-600 text-xs rounded px-2 py-1">閉じる</button>

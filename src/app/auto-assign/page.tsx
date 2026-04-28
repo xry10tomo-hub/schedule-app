@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, DEFAULT_TASKS, TASK_CATEGORIES } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, DEFAULT_TASKS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
 import type { DailyTask, Member, ShiftEntry } from '@/lib/types';
 
 // ===== Timeline Constants =====
@@ -365,27 +365,27 @@ export default function AutoAssignPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg px-4 py-3 border border-green-200 shadow-sm">
             <span className="text-xs text-green-600">出勤メンバー</span>
-            <p className="text-lg font-bold text-green-700">{activeMembers.length}名</p>
+            <p className="text-lg font-bold text-green-700">{fmtNum(activeMembers.length)}名</p>
             <p className="text-[10px] text-gray-400">{activeMembers.map(m => m.name).join('、')}</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-orange-200 shadow-sm">
             <span className="text-xs text-orange-600">本日のタスク</span>
-            <p className="text-lg font-bold text-orange-700">{tasks.length}件</p>
+            <p className="text-lg font-bold text-orange-700">{fmtNum(tasks.length)}件</p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-blue-200 shadow-sm">
             <span className="text-xs text-blue-600">総必要時間</span>
             <p className="text-lg font-bold text-blue-700">
-              {tasks.reduce((s, t) => s + t.plannedMinutes, 0)}分
+              {fmtNum(tasks.reduce((s, t) => s + t.plannedMinutes, 0))}分
             </p>
           </div>
           <div className="bg-white rounded-lg px-4 py-3 border border-purple-200 shadow-sm">
             <span className="text-xs text-purple-600">総リソース</span>
             <p className="text-lg font-bold text-purple-700">
-              {shiftsForDate.reduce((sum, s) => {
+              {fmtNum(shiftsForDate.reduce((sum, s) => {
                 const [sh, sm] = s.startTime.split(':').map(Number);
                 const [eh, em] = s.endTime.split(':').map(Number);
                 return sum + (eh * 60 + em - sh * 60 - sm);
-              }, 0)}分
+              }, 0))}分
             </p>
           </div>
         </div>
@@ -427,8 +427,8 @@ export default function AutoAssignPage() {
                             </div>
                           </td>
                           <td className="px-3 py-2 text-xs">{t.plannedCount}</td>
-                          <td className="px-3 py-2 text-xs">{t.minutesPerUnit || 0}分</td>
-                          <td className="px-3 py-2 text-xs font-bold text-orange-700">{t.plannedMinutes}分</td>
+                          <td className="px-3 py-2 text-xs">{fmtNum(t.minutesPerUnit || 0)}分</td>
+                          <td className="px-3 py-2 text-xs font-bold text-orange-700">{fmtNum(t.plannedMinutes)}分</td>
                           <td className="px-3 py-2">
                             <div className="flex flex-wrap gap-1">
                               {assignableMembers.length > 0 ? assignableMembers.map((m, idx) => (
@@ -514,14 +514,14 @@ export default function AutoAssignPage() {
                       ms.member.role === 'employee' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'
                     }`}>{ms.member.role === 'employee' ? '社員' : 'ＡＴ'}</span>
                   </div>
-                  <p className="text-sm font-bold text-gray-800 mt-1">{ms.totalMinutes}分 / {ms.shiftMinutes}分</p>
+                  <p className="text-sm font-bold text-gray-800 mt-1">{fmtNum(ms.totalMinutes)}分 / {fmtNum(ms.shiftMinutes)}分</p>
                   <div className="w-full bg-gray-100 rounded-full h-1.5 mt-1">
                     <div
                       className={`h-full rounded-full ${ms.freeMinutes < 0 ? 'bg-red-400' : ms.freeMinutes < 30 ? 'bg-yellow-400' : 'bg-green-400'}`}
                       style={{ width: `${Math.min(100, (ms.totalMinutes / ms.shiftMinutes) * 100)}%` }}
                     />
                   </div>
-                  <p className="text-[10px] text-gray-400 mt-1">空き: {ms.freeMinutes}分</p>
+                  <p className="text-[10px] text-gray-400 mt-1">空き: {fmtNum(ms.freeMinutes)}分</p>
                 </div>
               ))}
             </div>
@@ -579,7 +579,7 @@ export default function AutoAssignPage() {
                         })}
                       </div>
                       <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
-                        {totalMins}分
+                        {fmtNum(totalMins)}分
                       </div>
                     </div>
                   );
@@ -605,7 +605,7 @@ export default function AutoAssignPage() {
                   <div key={ms.member.id} className="bg-gray-50 rounded-lg p-4">
                     <div className="flex justify-between items-center mb-2">
                       <p className="text-sm font-bold text-gray-700">{ms.member.name}</p>
-                      <p className="text-xs text-gray-500">{ms.totalMinutes}分 / {ms.shiftMinutes}分</p>
+                      <p className="text-xs text-gray-500">{fmtNum(ms.totalMinutes)}分 / {fmtNum(ms.shiftMinutes)}分</p>
                     </div>
                     <div className="space-y-1">
                       {Object.entries(ms.taskBreakdown)
@@ -614,7 +614,7 @@ export default function AutoAssignPage() {
                           <div key={taskName} className="flex items-center gap-2">
                             <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(taskName) }} />
                             <span className="flex-1 text-xs text-gray-600 truncate">{taskName}</span>
-                            <span className="text-xs font-bold text-gray-700">{mins}分</span>
+                            <span className="text-xs font-bold text-gray-700">{fmtNum(mins)}分</span>
                             <div className="w-16 bg-gray-200 rounded-full h-1.5 overflow-hidden">
                               <div
                                 className="h-full rounded-full"
