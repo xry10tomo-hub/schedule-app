@@ -227,14 +227,25 @@ function DayCell({
 
       {/* Schedule chips */}
       <div className="mt-1 space-y-0.5">
-        {(showAll ? schedules : schedules.slice(0, 4)).map(s => (
-          <div key={s.id} className={`flex items-center gap-1 text-xs rounded px-1 py-0.5 group/chip ${
-            s.taskName === '固定業務' ? 'bg-yellow-100 text-yellow-800 font-bold' : 'bg-green-100 text-green-800'
-          }`}>
-            <span className="truncate">{s.taskName === '固定業務' ? '★固定業務' : s.taskName.replace(/^【[^】]+】/, '')}</span>
-            <button onClick={() => onRemove(s.id)} className="opacity-0 group-hover/chip:opacity-100 text-red-400 hover:text-red-600 flex-shrink-0">×</button>
-          </div>
-        ))}
+        {(showAll ? schedules : schedules.slice(0, 4)).map(s => {
+          // Collect all known task names from master to detect 'イベント' (direct input)
+          const knownNames = new Set<string>(['固定業務']);
+          Object.values(tasksByCategory).forEach(list => list.forEach(t => knownNames.add(t.name)));
+          const isEvent = !knownNames.has(s.taskName);
+          return (
+            <div key={s.id} className={`flex items-center gap-1 text-xs rounded px-1 py-0.5 group/chip ${
+              s.taskName === '固定業務'
+                ? 'bg-yellow-100 text-yellow-800 font-bold'
+                : isEvent
+                  ? 'bg-pink-100 text-pink-800 font-bold border-2 border-pink-400'
+                  : 'bg-green-100 text-green-800'
+            }`}>
+              {isEvent && <span className="text-[9px] flex-shrink-0">🎯</span>}
+              <span className="truncate">{s.taskName === '固定業務' ? '★固定業務' : s.taskName.replace(/^【[^】]+】/, '')}</span>
+              <button onClick={() => onRemove(s.id)} className="opacity-0 group-hover/chip:opacity-100 text-red-400 hover:text-red-600 flex-shrink-0">×</button>
+            </div>
+          );
+        })}
         {schedules.length > 4 && (
           <button
             onClick={() => setShowAll(!showAll)}

@@ -322,96 +322,68 @@ export default function ShippingPage() {
           </div>
         </div>
 
-        {/* Dashboard - 2 rows: 当日(top) / 両日(bottom) */}
-        <div className="space-y-3">
-          {/* 当日 row */}
-          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-            <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
-              <span className="text-[10px] text-blue-600 font-bold">当日 到着件数</span>
-              <p className="text-xl font-bold text-blue-700">{fmtNum(todayTotalCnt)}<span className="text-sm">件</span></p>
-              {todayTotalParcels !== todayTotalCnt && <p className="text-[10px] text-blue-500">（{fmtNum(todayTotalParcels)}件）</p>}
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-blue-200 shadow-sm">
-              <span className="text-[10px] text-blue-600 font-bold">当日 到着点数</span>
-              <p className="text-xl font-bold text-blue-700">{fmtNum(todayTotalPts)}<span className="text-sm">点</span></p>
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
-              <span className="text-[10px] text-green-600 font-bold">当日 実績件数</span>
-              <p className="text-xl font-bold text-green-700">{fmtNum(todayDoneCnt)}<span className="text-sm">件</span></p>
-              {todayDoneParcels !== todayDoneCnt && <p className="text-[10px] text-green-500">（{fmtNum(todayDoneParcels)}件）</p>}
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-green-200 shadow-sm">
-              <span className="text-[10px] text-green-600 font-bold">当日 実績点数</span>
-              <p className="text-xl font-bold text-green-700">{fmtNum(todayDonePts)}<span className="text-sm">点</span></p>
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-red-200 shadow-sm">
-              <span className="text-[10px] text-red-600 font-bold">当日 残り件数</span>
-              <p className="text-xl font-bold text-red-700">{fmtNum(todayRemainCnt)}<span className="text-sm">件</span></p>
-              {todayRemainParcels !== todayRemainCnt && <p className="text-[10px] text-red-500">（{fmtNum(todayRemainParcels)}件）</p>}
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-red-200 shadow-sm">
-              <span className="text-[10px] text-red-600 font-bold">当日 残り点数</span>
-              <p className="text-xl font-bold text-red-700">{fmtNum(todayRemainPts)}<span className="text-sm">点</span></p>
-            </div>
-          </div>
-          {/* 両日 row */}
-          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-            <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
-              <span className="text-[10px] text-purple-600 font-bold">両日 到着件数</span>
-              <p className="text-xl font-bold text-purple-700">{fmtNum(ryojitsuTotalCnt)}<span className="text-sm">件</span></p>
-              {ryojitsuTotalParcels !== ryojitsuTotalCnt && <p className="text-[10px] text-purple-500">（{fmtNum(ryojitsuTotalParcels)}件）</p>}
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-purple-200 shadow-sm">
-              <span className="text-[10px] text-purple-600 font-bold">両日 到着点数</span>
-              <p className="text-xl font-bold text-purple-700">{fmtNum(ryojitsuTotalPts)}<span className="text-sm">点</span></p>
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
-              <span className="text-[10px] text-teal-600 font-bold">両日 実績件数</span>
-              <p className="text-xl font-bold text-teal-700">{fmtNum(ryojitsuDoneCnt)}<span className="text-sm">件</span></p>
-              {ryojitsuDoneParcels !== ryojitsuDoneCnt && <p className="text-[10px] text-teal-500">（{fmtNum(ryojitsuDoneParcels)}件）</p>}
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-teal-200 shadow-sm">
-              <span className="text-[10px] text-teal-600 font-bold">両日 実績点数</span>
-              <p className="text-xl font-bold text-teal-700">{fmtNum(ryojitsuDonePts)}<span className="text-sm">点</span></p>
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
-              <span className="text-[10px] text-orange-600 font-bold">両日 残り件数</span>
-              <p className="text-xl font-bold text-orange-700">{fmtNum(ryojitsuRemainCnt)}<span className="text-sm">件</span></p>
-              {ryojitsuRemainParcels !== ryojitsuRemainCnt && <p className="text-[10px] text-orange-500">（{fmtNum(ryojitsuRemainParcels)}件）</p>}
-            </div>
-            <div className="bg-white rounded-lg px-3 py-3 border border-orange-200 shadow-sm">
-              <span className="text-[10px] text-orange-600 font-bold">両日 残り点数</span>
-              <p className="text-xl font-bold text-orange-700">{fmtNum(ryojitsuRemainPts)}<span className="text-sm">点</span></p>
-            </div>
-          </div>
-          {/* 合計 row */}
-          <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
-              <span className="text-[10px] text-gray-700 font-bold">合計 到着件数</span>
-              <p className="text-xl font-bold text-gray-800">{fmtNum(totalCnt)}<span className="text-sm">件</span></p>
-            </div>
-            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
-              <span className="text-[10px] text-gray-700 font-bold">合計 到着点数</span>
-              <p className="text-xl font-bold text-gray-800">{fmtNum(totalPts)}<span className="text-sm">点</span></p>
-            </div>
-            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
-              <span className="text-[10px] text-gray-700 font-bold">合計 実績件数</span>
-              <p className="text-xl font-bold text-gray-800">{fmtNum(totalDoneCnt)}<span className="text-sm">件</span></p>
-            </div>
-            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
-              <span className="text-[10px] text-gray-700 font-bold">合計 実績点数</span>
-              <p className="text-xl font-bold text-gray-800">{fmtNum(totalDonePts)}<span className="text-sm">点</span></p>
-            </div>
-            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
-              <span className="text-[10px] text-gray-700 font-bold">合計 残り件数</span>
-              <p className="text-xl font-bold text-gray-800">{fmtNum(totalRemainCnt)}<span className="text-sm">件</span></p>
-            </div>
-            <div className="bg-gray-100 rounded-lg px-3 py-3 border-2 border-gray-400 shadow-sm">
-              <span className="text-[10px] text-gray-700 font-bold">合計 残り点数</span>
-              <p className="text-xl font-bold text-gray-800">{fmtNum(totalRemainPts)}<span className="text-sm">点</span></p>
-            </div>
-          </div>
+        {/* 残り点数 視覚化グラフ */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 space-y-4">
+          <h3 className="text-sm font-bold text-gray-700">📊 進捗サマリー</h3>
+          {(() => {
+            const totalCntAll = todayTotalCnt + ryojitsuTotalCnt;
+            const totalPtsAll = todayTotalPts + ryojitsuTotalPts;
+            const doneCntAll = todayDoneCnt + ryojitsuDoneCnt;
+            const donePtsAll = todayDonePts + ryojitsuDonePts;
+            const remainCntAll = totalCntAll - doneCntAll;
+            const remainPtsAll = totalPtsAll - donePtsAll;
+
+            const ProgressBar = ({ label, done, total, remain, color, unit }: {
+              label: string; done: number; total: number; remain: number; color: string; unit: string;
+            }) => {
+              const pct = total > 0 ? (done / total) * 100 : 0;
+              const remainPct = 100 - pct;
+              return (
+                <div>
+                  <div className="flex justify-between items-center text-xs mb-1">
+                    <span className="font-bold text-gray-700">{label}</span>
+                    <span>
+                      <span className={color}><b>実績 {fmtNum(done)}{unit}</b></span>
+                      <span className="text-gray-400 mx-1">/</span>
+                      <span className="text-gray-700">予定 {fmtNum(total)}{unit}</span>
+                      <span className="ml-2 text-red-600 font-bold">残り {fmtNum(remain)}{unit}</span>
+                      <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded-full ${pct >= 100 ? 'bg-emerald-100 text-emerald-700' : pct >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{pct.toFixed(0)}%</span>
+                    </span>
+                  </div>
+                  <div className="h-5 w-full rounded-full overflow-hidden border border-gray-200 flex bg-gray-50">
+                    <div className={`h-full transition-all ${color.replace('text-', 'bg-')} flex items-center justify-center`} style={{ width: `${pct}%` }}>
+                      {pct >= 15 && <span className="text-[10px] text-white font-bold">{pct.toFixed(0)}%</span>}
+                    </div>
+                    <div className="h-full bg-red-100 flex items-center justify-center" style={{ width: `${remainPct}%` }}>
+                      {remainPct >= 15 && remain > 0 && <span className="text-[10px] text-red-700 font-bold">残 {fmtNum(remain)}{unit}</span>}
+                    </div>
+                  </div>
+                </div>
+              );
+            };
+
+            return (
+              <>
+                {/* 当日 */}
+                <div className="space-y-3">
+                  <ProgressBar label="🟦 当日 件数" done={todayDoneCnt} total={todayTotalCnt} remain={todayRemainCnt} color="text-blue-600" unit="件" />
+                  <ProgressBar label="🟦 当日 点数" done={todayDonePts} total={todayTotalPts} remain={todayRemainPts} color="text-blue-600" unit="点" />
+                </div>
+                {/* 両日 */}
+                <div className="space-y-3 pt-3 border-t border-gray-100">
+                  <ProgressBar label="🟪 両日 件数" done={ryojitsuDoneCnt} total={ryojitsuTotalCnt} remain={ryojitsuRemainCnt} color="text-purple-600" unit="件" />
+                  <ProgressBar label="🟪 両日 点数" done={ryojitsuDonePts} total={ryojitsuTotalPts} remain={ryojitsuRemainPts} color="text-purple-600" unit="点" />
+                </div>
+                {/* 合計 */}
+                <div className="space-y-3 pt-3 border-t-2 border-gray-300">
+                  <ProgressBar label="⚫ 合計 件数" done={doneCntAll} total={totalCntAll} remain={remainCntAll} color="text-gray-700" unit="件" />
+                  <ProgressBar label="⚫ 合計 点数" done={donePtsAll} total={totalPtsAll} remain={remainPtsAll} color="text-gray-700" unit="点" />
+                </div>
+              </>
+            );
+          })()}
         </div>
+
 
         {/* 配送業者別集計 */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
