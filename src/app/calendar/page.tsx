@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getMonthlySchedules, setMonthlySchedules, getTaskDefinitions, generateId, getDaysInMonth, TASK_CATEGORIES, DEFAULT_TASKS } from '@/lib/store';
+import { useAppContext, getMonthlySchedules, setMonthlySchedules, getTaskDefinitions, setTaskDefinitions, generateId, getDaysInMonth, TASK_CATEGORIES, DEFAULT_TASKS } from '@/lib/store';
 import type { MonthlySchedule, TaskDefinition } from '@/lib/types';
 
 export default function CalendarPage() {
@@ -163,6 +163,7 @@ export default function CalendarPage() {
                   onRemove={handleRemoveSchedule}
                   onCopy={() => handleCopyDay(day)}
                   onPaste={copiedDay !== null ? () => handlePasteDay(day) : undefined}
+                  onReloadTasks={loadSchedules}
                   isCopied={copiedDay === day}
                 />
               );
@@ -175,7 +176,7 @@ export default function CalendarPage() {
 }
 
 function DayCell({
-  day, dayOfWeek, isToday, schedules, tasksByCategory, onAdd, onRemove, onCopy, onPaste, isCopied
+  day, dayOfWeek, isToday, schedules, tasksByCategory, onAdd, onRemove, onCopy, onPaste, isCopied, onReloadTasks
 }: {
   day: number;
   dayOfWeek: number;
@@ -187,10 +188,16 @@ function DayCell({
   onCopy: () => void;
   onPaste?: () => void;
   isCopied: boolean;
+  onReloadTasks?: () => void;
 }) {
   const [showForm, setShowForm] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [formTask, setFormTask] = useState('');
+  const [expandedChipId, setExpandedChipId] = useState<string | null>(null);
+  const [showTaskManager, setShowTaskManager] = useState(false);
+  const [newTaskName, setNewTaskName] = useState('');
+  const [newTaskCategory, setNewTaskCategory] = useState<string>(TASK_CATEGORIES[0]);
+  const [deleteTaskName, setDeleteTaskName] = useState('');
 
   function handleSubmit() {
     onAdd(formTask);
@@ -232,17 +239,29 @@ function DayCell({
           const knownNames = new Set<string>(['固定業務']);
           Object.values(tasksByCategory).forEach(list => list.forEach(t => knownNames.add(t.name)));
           const isEvent = !knownNames.has(s.taskName);
+          const isExpanded = expandedChipId === s.id;
+          const displayName = s.taskName === '固定業務' ? '★固定業務' : s.taskName.replace(/^【[^】]+】/, '');
           return (
-            <div key={s.id} className={`flex items-center gap-1 text-xs rounded px-1 py-0.5 group/chip ${
-              s.taskName === '固定業務'
-                ? 'bg-yellow-100 text-yellow-800 font-bold'
-                : isEvent
-                  ? 'bg-pink-100 text-pink-800 font-bold border-2 border-pink-400'
-                  : 'bg-green-100 text-green-800'
-            }`}>
+            <div
+              key={s.id}
+              onClick={() => setExpandedChipId(isExpanded ? null : s.id)}
+              className={`flex items-center gap-1 text-xs rounded px-1 py-0.5 group/chip cursor-pointer ${
+                isExpanded ? 'relative z-20 shadow-lg ring-2 ring-blue-400' : ''
+              } ${
+                s.taskName === '固定業務'
+                  ? 'bg-yellow-100 text-yellow-800 font-bold'
+                  : isEvent
+                    ? 'bg-pink-100 text-pink-800 font-bold border-2 border-pink-400'
+                    : 'bg-green-100 text-green-800'
+              }`}
+              title={s.taskName}
+            >
               {isEvent && <span className="text-[9px] flex-shrink-0">🎯</span>}
-              <span className="truncate">{s.taskName === '固定業務' ? '★固定業務' : s.taskName.replace(/^【[^】]+】/, '')}</span>
-              <button onClick={() => onRemove(s.id)} className="opacity-0 group-hover/chip:opacity-100 text-red-400 hover:text-red-600 flex-shrink-0">×</button>
+              <span className={isExpanded ? 'whitespace-normal break-all font-bold' : 'truncate'}>{displayName}</span>
+              <button
+                onClick={e => { e.stopPropagation(); onRemove(s.id); }}
+                className={`${isExpanded ? 'opacity-100' : 'opacity-0 group-hover/chip:opacity-100'} text-red-400 hover:text-red-600 flex-shrink-0`}
+              >×</button>
             </div>
           );
         })}
@@ -258,7 +277,7 @@ function DayCell({
 
       {/* Add form dropdown - flips upward for days in last rows to avoid being clipped */}
       {showForm && (
-        <div className={`absolute z-50 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-64 space-y-2 ${
+        <div className={`absolute z-50 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-72 space-y-2 ${
           day >= 22 ? 'bottom-full mb-1' : 'top-full mt-1'
         }`}>
           <p className="text-[10px] font-semibold text-gray-500">プルダウンから選択</p>
@@ -286,6 +305,90 @@ function DayCell({
           <div className="flex gap-1">
             <button onClick={handleSubmit} disabled={!formTask} className="flex-1 bg-green-600 text-white text-xs rounded px-2 py-1 disabled:opacity-50">追加</button>
             <button onClick={() => setShowForm(false)} className="flex-1 bg-gray-200 text-gray-600 text-xs rounded px-2 py-1">閉じる</button>
+          </div>
+
+          {/* Task master management */}
+          <div className="border-t border-gray-100 pt-2 mt-2">
+            <button
+              onClick={e => { e.stopPropagation(); setShowTaskManager(v => !v); }}
+              className="w-full text-[10px] text-blue-600 hover:underline"
+            >{showTaskManager ? '▲ 業務マスター管理を閉じる' : '⚙️ 業務マスター管理（追加・削除）'}</button>
+            {showTaskManager && (
+              <div className="mt-2 space-y-2">
+                {/* Add to master */}
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-gray-600">新規業務をマスターに追加</p>
+                  <input
+                    type="text"
+                    value={newTaskName}
+                    onChange={e => setNewTaskName(e.target.value)}
+                    placeholder="業務名（例: 【販売】特別案件）"
+                    className="w-full text-[10px] border rounded px-2 py-1"
+                  />
+                  <select
+                    value={newTaskCategory}
+                    onChange={e => setNewTaskCategory(e.target.value)}
+                    className="w-full text-[10px] border rounded px-2 py-1"
+                  >
+                    {TASK_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
+                  </select>
+                  <button
+                    onClick={() => {
+                      if (!newTaskName.trim()) return;
+                      const allTasks = getTaskDefinitions();
+                      if (allTasks.some(t => t.name === newTaskName.trim())) {
+                        alert('同名の業務が既に存在します');
+                        return;
+                      }
+                      const newTask = {
+                        id: generateId(),
+                        name: newTaskName.trim(),
+                        category: newTaskCategory,
+                        defaultPointsPerUnit: 1,
+                        estimatedMinutesPerUnit: 10,
+                      };
+                      setTaskDefinitions([...allTasks, newTask]);
+                      setNewTaskName('');
+                      onReloadTasks?.();
+                    }}
+                    disabled={!newTaskName.trim()}
+                    className="w-full bg-blue-600 text-white text-[10px] rounded py-1 disabled:opacity-50"
+                  >+ 業務をマスターに追加</button>
+                </div>
+
+                {/* Delete from master */}
+                <div className="space-y-1">
+                  <p className="text-[10px] font-bold text-gray-600">既存業務をマスターから削除</p>
+                  <select
+                    value={deleteTaskName}
+                    onChange={e => setDeleteTaskName(e.target.value)}
+                    className="w-full text-[10px] border rounded px-2 py-1"
+                  >
+                    <option value="">削除する業務を選択</option>
+                    {Object.entries(tasksByCategory).map(([cat, list]) => {
+                      if (list.length === 0) return null;
+                      return (
+                        <optgroup key={cat} label={cat}>
+                          {list.map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+                        </optgroup>
+                      );
+                    })}
+                  </select>
+                  <button
+                    onClick={() => {
+                      if (!deleteTaskName) return;
+                      if (!confirm(`「${deleteTaskName}」をマスターから削除しますか？`)) return;
+                      const allTasks = getTaskDefinitions();
+                      setTaskDefinitions(allTasks.filter(t => t.name !== deleteTaskName));
+                      setDeleteTaskName('');
+                      onReloadTasks?.();
+                    }}
+                    disabled={!deleteTaskName}
+                    className="w-full bg-red-600 text-white text-[10px] rounded py-1 disabled:opacity-50"
+                  >🗑️ 選択した業務を削除</button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

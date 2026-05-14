@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, getTaskDefinitions, calculateDailySummary, getCategoryTaskColor, getHandovers, setHandovers, getMemberById, CATEGORY_COLORS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
+import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, getTaskDefinitions, setTaskDefinitions, generateId, calculateDailySummary, getCategoryTaskColor, getHandovers, setHandovers, getMemberById, CATEGORY_COLORS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, ShippingRecord, ShiftEntry, TaskDefinition, HandoverRequest } from '@/lib/types';
 
@@ -61,7 +61,7 @@ function blockToTime(blockIndex: number): string {
 }
 
 export default function HomePage() {
-  const { currentUserId, members, dataVersion, selectedDate } = useAppContext();
+  const { currentUserId, members, dataVersion, selectedDate, setSelectedDate } = useAppContext();
   const [tasks, setTasks] = useState<DailyTask[]>([]);
   const [shippingRecords, setShippingRecordsState] = useState<ShippingRecord[]>([]);
   const [timelineData, setTimelineData] = useState<Record<string, Record<string, string>>>({});
@@ -320,6 +320,7 @@ export default function HomePage() {
   const [overdueAlerts, setOverdueAlerts] = useState<{ blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
   const [teamOverdueAlerts, setTeamOverdueAlerts] = useState<{ memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
   const [toastVisible, setToastVisible] = useState(true); // on-screen overlay toast visibility
+  const [teamMissingAlerts, setTeamMissingAlerts] = useState<{ memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
 
   // Request desktop notification permission for own overdue alerts
   useEffect(() => {
@@ -373,22 +374,31 @@ export default function HomePage() {
     }
     setOverdueAlerts(alerts);
 
-    // === Team overdue alerts (shared on every user's home page) ===
+    // === Team overdue alerts (30+ min late) - existing ===
     const teamAlerts: { memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[] = [];
+    // === Team MISSING alerts (60+ min late = 抜け漏れ) - NEW, distinct color ===
+    const teamMissing: { memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[] = [];
     for (const member of members) {
-      if (member.id === currentUserId) continue; // skip self (already in own alerts)
+      if (member.id === currentUserId) continue;
       const memberPlanned = timelineData[member.id] || {};
       const memberActual = actualTimelineData[member.id] || {};
       for (const [blockStr, taskName] of Object.entries(memberPlanned)) {
         const blockIndex = Number(blockStr);
         const blockEndMinutes = TIMELINE_START * 60 + (blockIndex + 1) * 15;
-        if (currentMinutes >= blockEndMinutes + 30 && !memberActual[blockStr]) {
-          const scheduledTime = blockToTime(blockIndex);
+        if (memberActual[blockStr]) continue;
+        const lateBy = currentMinutes - blockEndMinutes;
+        const scheduledTime = blockToTime(blockIndex);
+        if (lateBy >= 60) {
+          // 60+ min late = considered 抜け漏れ (missing)
+          teamMissing.push({ memberId: member.id, memberName: member.name, blockIndex, taskName, scheduledTime });
+        } else if (lateBy >= 30) {
+          // 30-60 min late = regular delay
           teamAlerts.push({ memberId: member.id, memberName: member.name, blockIndex, taskName, scheduledTime });
         }
       }
     }
     setTeamOverdueAlerts(teamAlerts);
+    setTeamMissingAlerts(teamMissing);
   }, [selectedDate, timelineData, actualTimelineData, currentUserId, members, currentMember]);
 
   // Check every 60 seconds
@@ -427,7 +437,7 @@ export default function HomePage() {
   return (
     <DashboardLayout>
       {/* Fixed-position overdue alert overlay (always visible on screen) */}
-      {(overdueAlerts.length > 0 || teamOverdueAlerts.length > 0) && toastVisible && (
+      {(overdueAlerts.length > 0 || teamOverdueAlerts.length > 0 || teamMissingAlerts.length > 0) && toastVisible && (
         <div className="fixed top-4 right-4 z-[9999] max-w-md w-[92vw] sm:w-auto animate-fade-in space-y-2">
           {/* Own alerts */}
           {overdueAlerts.length > 0 && (
@@ -453,6 +463,45 @@ export default function HomePage() {
               </div>
             </div>
           )}
+          {/* Team MISSING alerts (60+ min late = 抜け漏れ, distinct purple color) */}
+          {teamMissingAlerts.length > 0 && (
+            <div className="bg-purple-600 text-white rounded-xl shadow-2xl border-2 border-purple-800 p-4">
+              <div className="flex items-start justify-between gap-3 mb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">🚨</span>
+                  <h3 className="text-sm font-extrabold">チーム業務抜け漏れ（{teamMissingAlerts.length}件）</h3>
+                </div>
+                {overdueAlerts.length === 0 && teamOverdueAlerts.length === 0 && (
+                  <button
+                    onClick={() => setToastVisible(false)}
+                    className="text-white/80 hover:text-white text-lg leading-none"
+                    title="閉じる"
+                  >✕</button>
+                )}
+              </div>
+              <div className="space-y-1.5 max-h-[40vh] overflow-y-auto">
+                {(() => {
+                  const byMember = new Map<string, typeof teamMissingAlerts>();
+                  for (const a of teamMissingAlerts) {
+                    if (!byMember.has(a.memberId)) byMember.set(a.memberId, []);
+                    byMember.get(a.memberId)!.push(a);
+                  }
+                  return Array.from(byMember.entries()).map(([mid, items]) => (
+                    <div key={mid} className="bg-purple-700/50 rounded px-2 py-1.5">
+                      <p className="text-xs font-bold mb-0.5">{items[0].memberName}さん</p>
+                      {items.map(a => (
+                        <div key={`${mid}-${a.blockIndex}`} className="flex items-start gap-2 text-[11px] ml-2">
+                          <span className="w-1 h-1 rounded-full bg-white flex-shrink-0 mt-1.5" />
+                          <span>「{a.taskName}」— 予定 <strong>{a.scheduledTime}</strong> から60分以上経過（抜け漏れ）</span>
+                        </div>
+                      ))}
+                    </div>
+                  ));
+                })()}
+              </div>
+            </div>
+          )}
+
           {/* Team alerts (other members) */}
           {teamOverdueAlerts.length > 0 && (
             <div className="bg-orange-500 text-white rounded-xl shadow-2xl border-2 border-orange-700 p-4">
@@ -506,7 +555,14 @@ export default function HomePage() {
             </h1>
             <p className="text-gray-500 text-sm mt-1">{dateStr}</p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 items-center">
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={e => setSelectedDate(e.target.value)}
+              className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm bg-white"
+              title="表示する日付"
+            />
             <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
               currentMember?.role === 'employee' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
             }`}>
@@ -874,6 +930,31 @@ export default function HomePage() {
               )}
               {showTaskSearchDropdown && (
                 <div className="absolute z-50 mt-1 w-[360px] max-h-[400px] overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-lg">
+                  {/* "Add new task" button if searched text doesn't match any existing task */}
+                  {taskSearchQuery.trim() && !filteredSearchTasks.some(t => t.name === taskSearchQuery.trim()) && (
+                    <button
+                      onClick={() => {
+                        const name = taskSearchQuery.trim();
+                        // Try to infer category from 【...】 prefix
+                        const match = name.match(/^【([^】]+)】/);
+                        const inferredCat = match && (TASK_CATEGORIES as readonly string[]).includes(match[1]) ? match[1] : 'その他';
+                        const allTasks = getTaskDefinitions();
+                        const newTask = {
+                          id: generateId(),
+                          name,
+                          category: inferredCat,
+                          defaultPointsPerUnit: 1,
+                          estimatedMinutesPerUnit: 10,
+                        };
+                        setTaskDefinitions([...allTasks, newTask]);
+                        setTaskDefs([...allTasks, newTask]);
+                        setSelectedPaintTask(name);
+                        setTaskSearchQuery('');
+                        setShowTaskSearchDropdown(false);
+                      }}
+                      className="w-full text-left px-3 py-2 text-xs bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold border-b border-blue-100"
+                    >+ 「{taskSearchQuery.trim()}」を新規業務として追加</button>
+                  )}
                   {TASK_CATEGORIES.map(cat => {
                     const catTasks = filteredSearchTasks.filter(t => t.category === cat);
                     if (catTasks.length === 0) return null;
@@ -884,25 +965,40 @@ export default function HomePage() {
                           {cat}
                         </div>
                         {catTasks.map(t => (
-                          <button
+                          <div
                             key={t.id}
-                            onClick={() => {
-                              setSelectedPaintTask(t.name);
-                              setTaskSearchQuery('');
-                              setShowTaskSearchDropdown(false);
-                            }}
-                            className={`w-full text-left px-3 py-1.5 text-xs hover:bg-gray-50 flex items-center gap-2 ${
+                            className={`flex items-center hover:bg-gray-50 ${
                               selectedPaintTask === t.name ? 'bg-blue-50 font-bold' : ''
                             }`}
                           >
-                            <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.name) }} />
-                            {t.name}
-                          </button>
+                            <button
+                              onClick={() => {
+                                setSelectedPaintTask(t.name);
+                                setTaskSearchQuery('');
+                                setShowTaskSearchDropdown(false);
+                              }}
+                              className="flex-1 text-left px-3 py-1.5 text-xs flex items-center gap-2"
+                            >
+                              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(t.name) }} />
+                              {t.name}
+                            </button>
+                            <button
+                              onClick={e => {
+                                e.stopPropagation();
+                                if (!confirm(`「${t.name}」を業務一覧から削除しますか？`)) return;
+                                const allTasks = getTaskDefinitions().filter(td => td.name !== t.name);
+                                setTaskDefinitions(allTasks);
+                                setTaskDefs(allTasks);
+                              }}
+                              className="px-2 py-1 text-[10px] text-red-400 hover:text-red-600 flex-shrink-0"
+                              title="この業務を削除"
+                            >🗑️</button>
+                          </div>
                         ))}
                       </div>
                     );
                   })}
-                  {filteredSearchTasks.length === 0 && (
+                  {filteredSearchTasks.length === 0 && !taskSearchQuery.trim() && (
                     <div className="px-3 py-4 text-xs text-gray-400 text-center">該当する業務がありません</div>
                   )}
                 </div>
@@ -1069,73 +1165,83 @@ export default function HomePage() {
           )}
         </div>
 
-        {/* ===== Team Timeline (all members) ===== */}
-        {activeMembers.length > 0 && Object.keys(timelineData).length > 0 && (
-          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-            <h3 className="text-sm font-semibold text-gray-600 mb-3">チーム全体のタイムライン</h3>
-            <div className="overflow-x-auto select-none">
-              <div className="flex items-center mb-1">
-                <div className="w-20 flex-shrink-0" />
-                <div className="flex flex-1">
-                  {Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => (
-                    <div key={i} className="text-[10px] text-gray-400 text-center" style={{ width: `${100 / (TIMELINE_END - TIMELINE_START)}%` }}>
-                      {TIMELINE_START + i}:00
+        {/* ===== Team Timeline (planned + actual) ===== */}
+        {activeMembers.length > 0 && (Object.keys(timelineData).length > 0 || Object.keys(actualTimelineData).length > 0) && (
+          <>
+            {(['planned', 'actual'] as const).map(mode => {
+              const sourceData = mode === 'planned' ? timelineData : actualTimelineData;
+              if (Object.keys(sourceData).length === 0) return null;
+              const titleText = mode === 'planned' ? 'チーム全体のタイムライン（予定）' : 'チーム全体のタイムライン（実績）';
+              const accentColor = mode === 'planned' ? 'border-green-200' : 'border-blue-200';
+              const titleColor = mode === 'planned' ? 'text-green-700' : 'text-blue-700';
+              return (
+                <div key={mode} className={`bg-white rounded-xl shadow-sm border ${accentColor} p-6`}>
+                  <h3 className={`text-sm font-bold mb-3 ${titleColor}`}>{titleText}</h3>
+                  <div className="overflow-x-auto select-none">
+                    <div className="flex items-center mb-1">
+                      <div className="w-20 flex-shrink-0" />
+                      <div className="flex flex-1">
+                        {Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => (
+                          <div key={i} className="text-[10px] text-gray-400 text-center" style={{ width: `${100 / (TIMELINE_END - TIMELINE_START)}%` }}>
+                            {TIMELINE_START + i}:00
+                          </div>
+                        ))}
+                      </div>
+                      <div className="w-16 flex-shrink-0" />
                     </div>
-                  ))}
-                </div>
-                <div className="w-16 flex-shrink-0" />
-              </div>
-              {activeMembers.map(m => {
-                const shift = shiftsForDate.find(s => s.memberId === m.id);
-                const memberBlocks = timelineData[m.id] || {};
-                const totalMins = Object.keys(memberBlocks).length * 15;
-                const isMe = m.id === currentUserId;
-
-                return (
-                  <div key={m.id} className={`flex items-center mb-1 ${isMe ? 'bg-green-50/50 rounded' : ''}`}>
-                    <div className={`w-20 flex-shrink-0 text-xs font-medium text-right pr-2 truncate ${isMe ? 'text-green-700 font-bold' : 'text-gray-700'}`}>
-                      {m.name}{isMe ? ' ★' : ''}
-                    </div>
-                    <div className="flex flex-1 h-7 bg-gray-50 rounded overflow-hidden border border-gray-100">
-                      {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
-                        const inShift = shift ? (() => {
-                          const [sh, sm] = shift.startTime.split(':').map(Number);
-                          const [eh, em] = shift.endTime.split(':').map(Number);
-                          const blockStart = TIMELINE_START * 60 + i * 15;
-                          return blockStart >= sh * 60 + sm && blockStart < eh * 60 + em;
-                        })() : false;
-                        const taskName = memberBlocks[String(i)];
-                        const isHourStart = i % BLOCKS_PER_HOUR === 0;
-                        return (
-                          <div
-                            key={i}
-                            className={`h-full ${isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'} ${inShift ? '' : 'opacity-30'}`}
-                            style={{
-                              width: `${100 / TOTAL_BLOCKS}%`,
-                              backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
-                            }}
-                            title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
-                          />
-                        );
-                      })}
-                    </div>
-                    <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
-                      {totalMins}分
-                    </div>
+                    {activeMembers.map(m => {
+                      const shift = shiftsForDate.find(s => s.memberId === m.id);
+                      const memberBlocks = sourceData[m.id] || {};
+                      const totalMins = Object.keys(memberBlocks).length * 15;
+                      const isMe = m.id === currentUserId;
+                      return (
+                        <div key={m.id} className={`flex items-center mb-1 ${isMe ? (mode === 'planned' ? 'bg-green-50/50' : 'bg-blue-50/50') + ' rounded' : ''}`}>
+                          <div className={`w-20 flex-shrink-0 text-xs font-medium text-right pr-2 truncate ${isMe ? (mode === 'planned' ? 'text-green-700' : 'text-blue-700') + ' font-bold' : 'text-gray-700'}`}>
+                            {m.name}{isMe ? ' ★' : ''}
+                          </div>
+                          <div className="flex flex-1 h-7 bg-gray-50 rounded overflow-hidden border border-gray-100">
+                            {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
+                              const inShift = shift ? (() => {
+                                const [sh, sm] = shift.startTime.split(':').map(Number);
+                                const [eh, em] = shift.endTime.split(':').map(Number);
+                                const blockStart = TIMELINE_START * 60 + i * 15;
+                                return blockStart >= sh * 60 + sm && blockStart < eh * 60 + em;
+                              })() : false;
+                              const taskName = memberBlocks[String(i)];
+                              const isHourStart = i % BLOCKS_PER_HOUR === 0;
+                              return (
+                                <div
+                                  key={i}
+                                  className={`h-full ${isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'} ${inShift ? '' : 'opacity-30'}`}
+                                  style={{
+                                    width: `${100 / TOTAL_BLOCKS}%`,
+                                    backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
+                                  }}
+                                  title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
+                                />
+                              );
+                            })}
+                          </div>
+                          <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
+                            {totalMins}分
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
-            {/* Color legend */}
-            <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100">
-              {allTaskNames.map(name => (
-                <span key={name} className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50">
-                  <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(name) }} />
-                  {name.replace(/^【[^】]+】/, '')}
-                </span>
-              ))}
-            </div>
-          </div>
+                  {/* Color legend */}
+                  <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100">
+                    {allTaskNames.map(name => (
+                      <span key={name} className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50">
+                        <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(name) }} />
+                        {name.replace(/^【[^】]+】/, '')}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </>
         )}
 
       </div>

@@ -3,6 +3,26 @@
 import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady, performUndo, runTaskMigration } from '@/lib/store';
+
+// Merge two arrays of records by `id`. Returns null if either side is not an array of objects with id.
+// On collision (same id in both), prefers the LOCAL record (assumed to be a more recent edit).
+// This recovers local-only records that haven't been synced yet, while preserving Firestore's complete dataset.
+function mergeArraysById(localData: unknown, remoteData: unknown): unknown[] | null {
+  if (!Array.isArray(localData) || !Array.isArray(remoteData)) return null;
+  // Both must be arrays of objects with `id` to merge
+  if (localData.length > 0 && (typeof localData[0] !== 'object' || localData[0] === null || !('id' in localData[0]))) return null;
+  if (remoteData.length > 0 && (typeof remoteData[0] !== 'object' || remoteData[0] === null || !('id' in remoteData[0]))) return null;
+  const merged = new Map<string, unknown>();
+  // Add remote first
+  for (const item of remoteData as Array<{ id?: string }>) {
+    if (item?.id) merged.set(item.id, item);
+  }
+  // Local overrides remote on id collision (newer local edits take precedence)
+  for (const item of localData as Array<{ id?: string }>) {
+    if (item?.id) merged.set(item.id, item);
+  }
+  return Array.from(merged.values());
+}
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
 import type { Member } from '@/lib/types';
@@ -19,21 +39,51 @@ export default function AppProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     setCurrentUserIdState(getCurrentUser());
 
-    // Initialize Firestore: load remote data first, then enable writes
+    // Initialize Firestore: smart merge so unsynced local data isn't lost
     async function initFirestore() {
       try {
         const timeoutPromise = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 5000));
         const firestorePromise = (async () => {
-          // Step 1: Load Firestore data INTO localStorage (Firestore is the source of truth)
+          // Step 1: SMART MERGE — for each key, compare localStorage vs Firestore
+          //   - If both exist: merge by id (for arrays of records). Push merged back to Firestore.
+          //     This RECOVERS local-only data that earlier failed to sync (e.g. from old buggy code).
+          //   - If only Firestore exists: write to localStorage
+          //   - If only localStorage exists: push to Firestore
           for (const key of SYNC_KEYS) {
             const snap = await getDoc(doc(db, 'appData', key));
-            if (snap.exists()) {
-              // Firestore has data → write it to localStorage (overwrite local)
-              const data = snap.data().value;
-              localStorage.setItem(key, JSON.stringify(data));
-              if (key === STORAGE_KEYS.members) {
-                setMembersState(data as Member[]);
+            const remoteExists = snap.exists();
+            const remoteData = remoteExists ? snap.data().value : null;
+            const localRaw = localStorage.getItem(key);
+            let localData: unknown = null;
+            try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
+
+            if (remoteExists && localData) {
+              // Both have data → merge if both are arrays (typical for record collections)
+              const merged = mergeArraysById(localData, remoteData);
+              if (merged !== null) {
+                // Detect if there are local-only records (need to push back)
+                const remoteIds = new Set((remoteData as Array<{ id?: string }> | null)?.map(r => r?.id).filter(Boolean) || []);
+                const localOnlyExists = Array.isArray(localData)
+                  && (localData as Array<{ id?: string }>).some(r => r?.id && !remoteIds.has(r.id));
+                if (localOnlyExists) {
+                  console.log(`[Firestore] Recovering local-only records for "${key}"`);
+                  await setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() });
+                }
+                localStorage.setItem(key, JSON.stringify(merged));
+                if (key === STORAGE_KEYS.members) setMembersState(merged as Member[]);
+              } else {
+                // Not mergeable (object, not array) → use Firestore as source of truth
+                localStorage.setItem(key, JSON.stringify(remoteData));
+                if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
               }
+            } else if (remoteExists) {
+              // Only Firestore has data → pull
+              localStorage.setItem(key, JSON.stringify(remoteData));
+              if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+            } else if (localData) {
+              // Only localStorage has data → push to Firestore
+              console.log(`[Firestore] Pushing initial data for "${key}"`);
+              await setDoc(doc(db, 'appData', key), { value: localData, updatedAt: Date.now() });
             }
           }
 
@@ -51,32 +101,17 @@ export default function AppProvider({ children }: { children: React.ReactNode })
             }
           }
 
-          // Step 3: Push any localStorage-only data to Firestore (for non-default keys)
-          for (const key of SYNC_KEYS) {
-            const snap = await getDoc(doc(db, 'appData', key));
-            if (!snap.exists()) {
-              const localData = localStorage.getItem(key);
-              if (localData) {
-                await setDoc(doc(db, 'appData', key), {
-                  value: JSON.parse(localData),
-                  updatedAt: Date.now(),
-                });
-              }
-            }
-          }
           return 'done' as const;
         })();
 
         const result = await Promise.race([firestorePromise, timeoutPromise]);
         if (result === 'timeout') {
-          console.warn('Firestore init timed out, continuing with localStorage');
-          setFirestoreReady(false);
-        } else {
-          setFirestoreReady(true);
+          console.warn('Firestore init timed out, continuing in background');
         }
+        setFirestoreReady(true);
       } catch (err) {
         console.error('Firestore init error:', err);
-        setFirestoreReady(false);
+        setFirestoreReady(true);
       }
 
       // Now read members from localStorage (which now has Firestore data)
@@ -122,6 +157,87 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
     return () => unsubs.forEach(u => u());
   }, [firestoreReady]);
+
+  // Force refresh: smart merge between Firestore and local (rescues unsynced records)
+  const forceRefresh = useCallback(async () => {
+    try {
+      for (const key of SYNC_KEYS) {
+        const snap = await getDoc(doc(db, 'appData', key));
+        const remoteExists = snap.exists();
+        const remoteData = remoteExists ? snap.data().value : null;
+        const localRaw = localStorage.getItem(key);
+        let localData: unknown = null;
+        try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
+
+        if (remoteExists && localData) {
+          const merged = mergeArraysById(localData, remoteData);
+          if (merged !== null) {
+            const remoteIds = new Set((remoteData as Array<{ id?: string }> | null)?.map(r => r?.id).filter(Boolean) || []);
+            const localOnlyExists = Array.isArray(localData)
+              && (localData as Array<{ id?: string }>).some(r => r?.id && !remoteIds.has(r.id));
+            if (localOnlyExists) {
+              console.log(`[Firestore] forceRefresh: recovering local-only records for "${key}"`);
+              await setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() });
+            }
+            localStorage.setItem(key, JSON.stringify(merged));
+            if (key === STORAGE_KEYS.members) setMembersState(merged as Member[]);
+          } else {
+            // Not array-of-id (e.g., timeline/perf objects keyed by date) → use Firestore as truth
+            localStorage.setItem(key, JSON.stringify(remoteData));
+            if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+          }
+        } else if (remoteExists) {
+          localStorage.setItem(key, JSON.stringify(remoteData));
+          if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+        } else if (localData) {
+          // Firestore is empty for this key but local has data → push it
+          console.log(`[Firestore] forceRefresh: pushing local data to empty remote "${key}"`);
+          await setDoc(doc(db, 'appData', key), { value: localData, updatedAt: Date.now() });
+        }
+      }
+      setDataVersion(v => v + 1);
+    } catch (err) {
+      console.error('Force refresh error:', err);
+    }
+  }, []);
+
+  // Auto-refresh when user returns to the tab (visibilitychange)
+  useEffect(() => {
+    if (!firestoreReady) return;
+    function handleVisibility() {
+      if (document.visibilityState === 'visible') {
+        forceRefresh();
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [firestoreReady, forceRefresh]);
+
+  // Auto-refresh when network reconnects
+  useEffect(() => {
+    if (!firestoreReady) return;
+    function handleOnline() { forceRefresh(); }
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, [firestoreReady, forceRefresh]);
+
+  // Periodic refresh every 15 seconds (with auto-merge to recover unsynced data)
+  useEffect(() => {
+    if (!firestoreReady) return;
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        forceRefresh();
+      }
+    }, 15_000); // 15 seconds
+    return () => clearInterval(interval);
+  }, [firestoreReady, forceRefresh]);
+
+  // Refresh on every route change (when user navigates between pages)
+  useEffect(() => {
+    if (!firestoreReady) return;
+    forceRefresh();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathname, firestoreReady]);
 
   // Global Ctrl+Z / Cmd+Z undo handler
   useEffect(() => {
@@ -185,6 +301,7 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       firestoreReady,
       selectedDate,
       setSelectedDate: handleSetSelectedDate,
+      forceRefresh,
     }}>
       {children}
     </AppContext.Provider>

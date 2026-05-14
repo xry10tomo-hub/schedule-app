@@ -36,6 +36,8 @@ export default function HandoverPage() {
   });
   const [formReason, setFormReason] = useState('');
   const [formDetail, setFormDetail] = useState('');
+  const [formCustomerName, setFormCustomerName] = useState('');
+  const [formScheduledTime, setFormScheduledTime] = useState('');
 
   const reload = useCallback(() => {
     setItemsState(getHandovers());
@@ -103,6 +105,8 @@ export default function HandoverPage() {
       reviewComment: '',
       createdAt: Date.now(),
       reviewedAt: 0,
+      customerName: formCustomerName || undefined,
+      scheduledTime: formScheduledTime || undefined,
     };
     const all = [...getHandovers(), newItem];
     setHandovers(all);
@@ -112,6 +116,8 @@ export default function HandoverPage() {
     setFormTask('');
     setFormReason('');
     setFormDetail('');
+    setFormCustomerName('');
+    setFormScheduledTime('');
     setTab('list');
   }
 
@@ -192,6 +198,25 @@ export default function HandoverPage() {
                     );
                   })}
                 </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">顧客名（任意）</label>
+                <input
+                  type="text"
+                  value={formCustomerName}
+                  onChange={e => setFormCustomerName(e.target.value)}
+                  placeholder="例: 〇〇様"
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">対応時間（任意）</label>
+                <input
+                  type="time"
+                  value={formScheduledTime}
+                  onChange={e => setFormScheduledTime(e.target.value)}
+                  className="w-full border rounded-lg px-3 py-2 text-sm"
+                />
               </div>
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-gray-600 mb-1">引き継ぎ理由</label>
@@ -442,6 +467,16 @@ function HandoverItemRow({
             <span className="text-xs text-gray-500">by {applicant?.name || item.applicantId}</span>
             {isOwn && <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded">自分</span>}
           </div>
+          {(item.customerName || item.scheduledTime) && (
+            <div className={`flex gap-3 text-xs mt-1 ${isCompleted ? 'line-through' : ''}`}>
+              {item.customerName && (
+                <span className="px-2 py-0.5 bg-pink-100 text-pink-800 rounded">👤 {item.customerName}</span>
+              )}
+              {item.scheduledTime && (
+                <span className="px-2 py-0.5 bg-blue-100 text-blue-800 rounded">🕐 {item.scheduledTime}</span>
+              )}
+            </div>
+          )}
           {item.reason && (
             <p className={`text-xs text-gray-600 ${isCompleted ? 'line-through' : ''}`}>💬 理由: {item.reason}</p>
           )}

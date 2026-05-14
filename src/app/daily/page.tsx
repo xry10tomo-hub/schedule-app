@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, getCategoryTaskColor, CATEGORY_COLORS, TASK_CATEGORIES, getFixedTasks, getFixedTaskDefaults, getTaskAssignments, setTaskAssignments, DEFAULT_TASKS, fmtNum } from '@/lib/store';
+import NumberInput from '@/components/NumberInput';
 import type { TaskAssignmentConfig } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, TaskDefinition, ShiftEntry } from '@/lib/types';
@@ -725,11 +726,11 @@ export default function DailyPage() {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">必要件数/点数/回数</label>
-                <input type="number" value={formRequiredCount} onChange={e => setFormRequiredCount(Number(e.target.value))} className="w-full border rounded-lg px-3 py-2 text-sm" min={0} />
+                <NumberInput value={formRequiredCount} onChange={v => setFormRequiredCount(v)} className="w-full border rounded-lg px-3 py-2 text-sm" min={0} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">1回あたりの時間（分）</label>
-                <input type="number" value={formMinutesPerUnit} onChange={e => setFormMinutesPerUnit(Number(e.target.value))} className="w-full border rounded-lg px-3 py-2 text-sm" min={0} />
+                <NumberInput value={formMinutesPerUnit} onChange={v => setFormMinutesPerUnit(v)} className="w-full border rounded-lg px-3 py-2 text-sm" min={0} />
               </div>
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">必要時間（分）</label>
@@ -809,10 +810,10 @@ export default function DailyPage() {
                             </div>
                           </td>
                           <td className="px-3 py-3">
-                            <input type="number" value={t.plannedCount} onChange={e => handleUpdateField(t.id, 'plannedCount', Number(e.target.value))} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
+                            <NumberInput value={t.plannedCount} onChange={v => handleUpdateField(t.id, 'plannedCount', v)} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
                           </td>
                           <td className="px-3 py-3">
-                            <input type="number" value={t.minutesPerUnit || 0} onChange={e => handleUpdateField(t.id, 'minutesPerUnit', Number(e.target.value))} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
+                            <NumberInput value={t.minutesPerUnit || 0} onChange={v => handleUpdateField(t.id, 'minutesPerUnit', v)} className="w-20 border rounded px-2 py-1 text-sm" min={0} />
                           </td>
                           <td className="px-3 py-3">
                             <span className="font-bold text-orange-700">{fmtNum(t.plannedMinutes)}分</span>
@@ -1266,6 +1267,11 @@ export default function DailyPage() {
                             const gap = actualMinutes - planMinutes;
                             const memberEntries = actualTimelineAggregation[taskName]?.members || {};
 
+                            // Tasks where speed is measured per-point (not per-count)
+                            const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
+                            const usePoint = POINTS_BASED_SPEED_TASKS.includes(taskName);
+                            const speedUnit = usePoint ? '点' : '件';
+
                             // Aggregate performance
                             let totalCount = 0, totalPoints = 0;
                             const memberPerfs: { name: string; memberId: string; count: number; points: number; minutes: number; speed: number | null }[] = [];
@@ -1276,13 +1282,15 @@ export default function DailyPage() {
                               const pts = perf?.points || 0;
                               totalCount += cnt;
                               totalPoints += pts;
+                              const denomPerMember = usePoint ? pts : cnt;
                               memberPerfs.push({
                                 name: m?.name || mid, memberId: mid, count: cnt, points: pts, minutes: mins,
-                                speed: cnt > 0 && mins > 0 ? Math.round((mins / cnt) * 10) / 10 : null,
+                                speed: denomPerMember > 0 && mins > 0 ? Math.round((mins / denomPerMember) * 10) / 10 : null,
                               });
                             });
-                            const avgSpeed = totalCount > 0 && actualMinutes > 0
-                              ? Math.round((actualMinutes / totalCount) * 10) / 10 : null;
+                            const denomTotal = usePoint ? totalPoints : totalCount;
+                            const avgSpeed = denomTotal > 0 && actualMinutes > 0
+                              ? Math.round((actualMinutes / denomTotal) * 10) / 10 : null;
 
                             if (planMinutes === 0 && actualMinutes === 0) return null;
 
@@ -1306,7 +1314,7 @@ export default function DailyPage() {
                                   {config.points ? `${fmtNum(totalPoints)}点` : '-'}
                                 </td>
                                 <td className="px-3 py-2 text-right font-bold text-green-700">
-                                  {avgSpeed !== null ? `${avgSpeed}分/件` : '-'}
+                                  {avgSpeed !== null ? `${avgSpeed}分/${speedUnit}` : '-'}
                                 </td>
                                 <td className="px-3 py-2">
                                   <div className="space-y-0.5">
@@ -1316,7 +1324,7 @@ export default function DailyPage() {
                                         <span className="text-blue-600">{fmtNum(mp.minutes)}分</span>
                                         {config.count && <span className="text-purple-600">{fmtNum(mp.count)}件</span>}
                                         {config.points && <span className="text-purple-600">{fmtNum(mp.points)}点</span>}
-                                        {mp.speed !== null && <span className="text-green-600">{mp.speed}分/件</span>}
+                                        {mp.speed !== null && <span className="text-green-600">{mp.speed}分/{speedUnit}</span>}
                                       </div>
                                     ))}
                                   </div>
@@ -1328,6 +1336,72 @@ export default function DailyPage() {
                       </table>
                     </div>
                   </div>
+
+                  {/* Team Timeline (実績) - replaces planned, uses actual data */}
+                  {activeMembers.length > 0 && Object.keys(actualTimelineData).length > 0 && (
+                    <div className="bg-white rounded-xl shadow-sm border border-blue-200 p-5">
+                      <h3 className="text-sm font-bold text-blue-700 mb-3 flex items-center gap-2">
+                        <span className="w-1.5 h-5 bg-blue-500 rounded-full" />
+                        チーム全体のタイムライン（実績）
+                      </h3>
+                      <div className="overflow-x-auto select-none">
+                        <div className="flex items-center mb-1">
+                          <div className="w-20 flex-shrink-0" />
+                          <div className="flex flex-1">
+                            {Array.from({ length: TIMELINE_END - TIMELINE_START }, (_, i) => (
+                              <div key={i} className="text-[10px] text-gray-400 text-center" style={{ width: `${100 / (TIMELINE_END - TIMELINE_START)}%` }}>
+                                {TIMELINE_START + i}:00
+                              </div>
+                            ))}
+                          </div>
+                          <div className="w-16 flex-shrink-0" />
+                        </div>
+                        {activeMembers.map(m => {
+                          const shift = shiftsForDate.find(s => s.memberId === m.id);
+                          const memberBlocks = actualTimelineData[m.id] || {};
+                          const totalMins = Object.keys(memberBlocks).length * 15;
+                          return (
+                            <div key={m.id} className="flex items-center mb-1">
+                              <div className="w-20 flex-shrink-0 text-xs font-medium text-right pr-2 truncate text-gray-700">
+                                {m.name}
+                              </div>
+                              <div className="flex flex-1 h-6 bg-gray-50 rounded overflow-hidden border border-gray-100">
+                                {Array.from({ length: TOTAL_BLOCKS }, (_, i) => {
+                                  const inShift = isBlockInShift(i, shift);
+                                  const taskName = memberBlocks[String(i)];
+                                  const isHourStart = i % BLOCKS_PER_HOUR === 0;
+                                  return (
+                                    <div
+                                      key={i}
+                                      className={`h-full ${isHourStart ? 'border-l border-gray-200' : 'border-l border-gray-100/50'} ${inShift ? '' : 'opacity-30'}`}
+                                      style={{
+                                        width: `${100 / TOTAL_BLOCKS}%`,
+                                        backgroundColor: taskName ? getTaskColor(taskName) : (inShift ? '#f9fafb' : '#f3f4f6'),
+                                      }}
+                                      title={taskName ? `${blockToTime(i)} - ${taskName}` : blockToTime(i)}
+                                    />
+                                  );
+                                })}
+                              </div>
+                              <div className="w-16 flex-shrink-0 text-[10px] text-gray-500 text-right pl-1">
+                                {fmtNum(totalMins)}分
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      {uniqueTaskNames.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mt-3 pt-3 border-t border-gray-100">
+                          {uniqueTaskNames.map(name => (
+                            <div key={name} className="flex items-center gap-1 text-[10px] text-gray-600">
+                              <span className="w-2.5 h-2.5 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(name) }} />
+                              <span>{name.replace(/^【[^】]+】/, '')}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* 抜け漏れ業務 */}
                   <div className="bg-white rounded-xl shadow-sm border border-orange-200 p-5">

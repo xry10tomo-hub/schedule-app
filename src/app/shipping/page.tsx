@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
+import NumberInput from '@/components/NumberInput';
 import { useAppContext, getShippingRecords, setShippingRecords, getDailyTasks, getActualPerformanceForDate, setActualPerformanceForDate, generateId, exportToCSV, fmtNum } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { ShippingRecord } from '@/lib/types';
@@ -463,11 +464,10 @@ export default function ShippingPage() {
                   </select>
                 </td>
                 <td className="px-1 py-2">
-                  <input
-                    type="number"
+                  <NumberInput
                     value={r.points}
                     min={0}
-                    onChange={e => updateRecord(r.id, { points: Number(e.target.value) })}
+                    onChange={v => updateRecord(r.id, { points: v })}
                     className={`w-full border rounded px-1 py-1 text-xs text-center ${cellFocusClass}`}
                   />
                 </td>

@@ -114,6 +114,19 @@ export const DEFAULT_TASKS: TaskDefinition[] = [
   { id: 'sell-25', name: '【販売】RELE請求', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-26', name: '【販売】AVE請求', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
   { id: 'sell-27', name: '【販売】明細確認・交渉', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 15 },
+  { id: 'sell-29', name: '【販売】mb発送', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-30', name: '【販売】mb予約', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-31', name: '【販売】mb後交渉', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-32', name: '【販売】NJ発送', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-33', name: '【販売】NJ予約', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-34', name: '【販売】NJ後交渉', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-35', name: '【販売】ソーティング戻り', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 10 },
+  { id: 'sell-36', name: '【販売】NJダイヤ前半大会', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'sell-37', name: '【販売】NJダイヤ後半大会', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'sell-38', name: '【販売】NJ製品大会', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'sell-39', name: '【販売】mbブランド大会', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'sell-40', name: '【販売】mb道具一', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
+  { id: 'sell-41', name: '【販売】mb宝石大会', category: '販売', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
   // 社内
   { id: 'internal-1', name: '【社内】ミーティング準備', category: '社内', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 15 },
   { id: 'internal-2', name: '【社内】ミーティング', category: '社内', defaultPointsPerUnit: 1, estimatedMinutesPerUnit: 30 },
@@ -342,16 +355,69 @@ export function isFirestoreSyncReady(): boolean {
 
 // Debounce Firestore writes per key to prevent write-stream exhaustion
 const firestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingFirestoreValues = new Map<string, unknown>();
+
+async function writeWithRetry(key: string, value: unknown, attempt: number = 0): Promise<void> {
+  try {
+    await setDoc(doc(db, 'appData', key), {
+      value: JSON.parse(JSON.stringify(value)),
+      updatedAt: Date.now(),
+    });
+    console.log(`[Firestore] Synced "${key}" successfully`);
+  } catch (err) {
+    console.error(`[Firestore] Sync error for "${key}" (attempt ${attempt + 1}):`, err);
+    if (attempt < 3) {
+      // Retry after exponential backoff: 1s, 2s, 4s
+      setTimeout(() => writeWithRetry(key, value, attempt + 1), 1000 * Math.pow(2, attempt));
+    } else {
+      console.error(`[Firestore] Failed to sync "${key}" after 4 attempts`);
+    }
+  }
+}
+
 function debouncedFirestoreSync(key: string, value: unknown) {
   const existing = firestoreTimers.get(key);
   if (existing) clearTimeout(existing);
+  // Track latest pending value so beforeunload can flush
+  pendingFirestoreValues.set(key, value);
   firestoreTimers.set(key, setTimeout(() => {
     firestoreTimers.delete(key);
-    setDoc(doc(db, 'appData', key), {
-      value: JSON.parse(JSON.stringify(value)),
-      updatedAt: Date.now(),
-    }).catch((err) => console.error('Firestore sync error:', err));
-  }, 500));
+    pendingFirestoreValues.delete(key);
+    writeWithRetry(key, value);
+  }, 200));
+}
+
+// Flush all pending writes immediately (called on beforeunload/visibilitychange-hidden)
+export function flushPendingFirestoreWrites(): Promise<void> {
+  const entries = Array.from(pendingFirestoreValues.entries());
+  if (entries.length === 0) return Promise.resolve();
+  // Cancel timers
+  for (const timer of firestoreTimers.values()) clearTimeout(timer);
+  firestoreTimers.clear();
+  pendingFirestoreValues.clear();
+  // Fire all pending writes immediately
+  return Promise.all(
+    entries.map(([key, value]) =>
+      setDoc(doc(db, 'appData', key), {
+        value: JSON.parse(JSON.stringify(value)),
+        updatedAt: Date.now(),
+      }).catch((err) => console.error('Firestore flush error:', err))
+    )
+  ).then(() => undefined);
+}
+
+// Set up auto-flush on browser close / tab hide (browser-only)
+if (typeof window !== 'undefined') {
+  // beforeunload: try synchronous flush (best-effort)
+  window.addEventListener('beforeunload', () => {
+    flushPendingFirestoreWrites();
+  });
+  // visibilitychange (tab hide): more reliable than beforeunload on mobile
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') {
+      flushPendingFirestoreWrites();
+    }
+  });
 }
 
 // Undo history stack - captures previous values so Ctrl+Z can restore them
@@ -478,7 +544,7 @@ export const CATEGORY_RENAMES: Record<string, string> = {
 
 export function runTaskMigration(): boolean {
   if (typeof window === 'undefined') return false;
-  const MIGRATION_KEY = 'schedule_task_rename_migration_v2';
+  const MIGRATION_KEY = 'schedule_task_rename_migration_v3';
   if (localStorage.getItem(MIGRATION_KEY) === 'done') return false;
   let changed = false;
 
@@ -795,6 +861,7 @@ export interface AppContextType {
   firestoreReady: boolean;
   selectedDate: string; // shared across pages (YYYY-MM-DD)
   setSelectedDate: (date: string) => void;
+  forceRefresh: () => Promise<void>;
 }
 
 export const AppContext = createContext<AppContextType>({
@@ -806,6 +873,7 @@ export const AppContext = createContext<AppContextType>({
   firestoreReady: false,
   selectedDate: '',
   setSelectedDate: () => {},
+  forceRefresh: async () => {},
 });
 
 export function useAppContext() {

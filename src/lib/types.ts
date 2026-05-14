@@ -102,6 +102,8 @@ export interface HandoverRequest {
   completed?: boolean; // true when marked complete from HOME screen
   completedAt?: number;
   completedBy?: string; // member id who marked it complete
+  customerName?: string; // optional customer name
+  scheduledTime?: string; // optional time (HH:MM) when handover should be handled
 }
 
 export interface MemberSummary {
