@@ -184,8 +184,17 @@ export default function HomePage() {
   const todayRemainResource = todayRemainPts * 2;
   const ryojitsuRemainResource = ryojitsuRemainPts * 2;
 
-  // Shift data
-  const shiftsForDate = getShifts().filter(s => s.date === selectedDate);
+  // Shift data — memoized + deduplicated by memberId to prevent inflated totals
+  const shiftsForDate = useMemo(() => {
+    const all = getShifts().filter(s => s.date === selectedDate);
+    // Dedupe by memberId: keep last (latest) entry per member for the day
+    const byMember = new Map<string, ShiftEntry>();
+    for (const s of all) {
+      byMember.set(s.memberId, s);
+    }
+    return Array.from(byMember.values());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate, dataVersion]);
   const myShift = shiftsForDate.find(s => s.memberId === currentUserId);
   const myShiftMinutes = myShift ? (() => {
     const [sh, sm] = myShift.startTime.split(':').map(Number);
@@ -373,33 +382,10 @@ export default function HomePage() {
       }
     }
     setOverdueAlerts(alerts);
-
-    // === Team overdue alerts (30+ min late) - existing ===
-    const teamAlerts: { memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[] = [];
-    // === Team MISSING alerts (60+ min late = 抜け漏れ) - NEW, distinct color ===
-    const teamMissing: { memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[] = [];
-    for (const member of members) {
-      if (member.id === currentUserId) continue;
-      const memberPlanned = timelineData[member.id] || {};
-      const memberActual = actualTimelineData[member.id] || {};
-      for (const [blockStr, taskName] of Object.entries(memberPlanned)) {
-        const blockIndex = Number(blockStr);
-        const blockEndMinutes = TIMELINE_START * 60 + (blockIndex + 1) * 15;
-        if (memberActual[blockStr]) continue;
-        const lateBy = currentMinutes - blockEndMinutes;
-        const scheduledTime = blockToTime(blockIndex);
-        if (lateBy >= 60) {
-          // 60+ min late = considered 抜け漏れ (missing)
-          teamMissing.push({ memberId: member.id, memberName: member.name, blockIndex, taskName, scheduledTime });
-        } else if (lateBy >= 30) {
-          // 30-60 min late = regular delay
-          teamAlerts.push({ memberId: member.id, memberName: member.name, blockIndex, taskName, scheduledTime });
-        }
-      }
-    }
-    setTeamOverdueAlerts(teamAlerts);
-    setTeamMissingAlerts(teamMissing);
-  }, [selectedDate, timelineData, actualTimelineData, currentUserId, members, currentMember]);
+    // Team / missing alerts are disabled per user request
+    setTeamOverdueAlerts([]);
+    setTeamMissingAlerts([]);
+  }, [selectedDate, timelineData, actualTimelineData, currentUserId, currentMember]);
 
   // Check every 60 seconds
   useEffect(() => {
@@ -437,7 +423,7 @@ export default function HomePage() {
   return (
     <DashboardLayout>
       {/* Fixed-position overdue alert overlay (always visible on screen) */}
-      {(overdueAlerts.length > 0 || teamOverdueAlerts.length > 0 || teamMissingAlerts.length > 0) && toastVisible && (
+      {overdueAlerts.length > 0 && toastVisible && (
         <div className="fixed top-4 right-4 z-[9999] max-w-md w-[92vw] sm:w-auto animate-fade-in space-y-2">
           {/* Own alerts */}
           {overdueAlerts.length > 0 && (
@@ -460,84 +446,6 @@ export default function HomePage() {
                     <span>「{a.taskName}」— 予定 <strong>{a.scheduledTime}</strong> から30分以上超過。実績を入力してください。</span>
                   </div>
                 ))}
-              </div>
-            </div>
-          )}
-          {/* Team MISSING alerts (60+ min late = 抜け漏れ, distinct purple color) */}
-          {teamMissingAlerts.length > 0 && (
-            <div className="bg-purple-600 text-white rounded-xl shadow-2xl border-2 border-purple-800 p-4">
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">🚨</span>
-                  <h3 className="text-sm font-extrabold">チーム業務抜け漏れ（{teamMissingAlerts.length}件）</h3>
-                </div>
-                {overdueAlerts.length === 0 && teamOverdueAlerts.length === 0 && (
-                  <button
-                    onClick={() => setToastVisible(false)}
-                    className="text-white/80 hover:text-white text-lg leading-none"
-                    title="閉じる"
-                  >✕</button>
-                )}
-              </div>
-              <div className="space-y-1.5 max-h-[40vh] overflow-y-auto">
-                {(() => {
-                  const byMember = new Map<string, typeof teamMissingAlerts>();
-                  for (const a of teamMissingAlerts) {
-                    if (!byMember.has(a.memberId)) byMember.set(a.memberId, []);
-                    byMember.get(a.memberId)!.push(a);
-                  }
-                  return Array.from(byMember.entries()).map(([mid, items]) => (
-                    <div key={mid} className="bg-purple-700/50 rounded px-2 py-1.5">
-                      <p className="text-xs font-bold mb-0.5">{items[0].memberName}さん</p>
-                      {items.map(a => (
-                        <div key={`${mid}-${a.blockIndex}`} className="flex items-start gap-2 text-[11px] ml-2">
-                          <span className="w-1 h-1 rounded-full bg-white flex-shrink-0 mt-1.5" />
-                          <span>「{a.taskName}」— 予定 <strong>{a.scheduledTime}</strong> から60分以上経過（抜け漏れ）</span>
-                        </div>
-                      ))}
-                    </div>
-                  ));
-                })()}
-              </div>
-            </div>
-          )}
-
-          {/* Team alerts (other members) */}
-          {teamOverdueAlerts.length > 0 && (
-            <div className="bg-orange-500 text-white rounded-xl shadow-2xl border-2 border-orange-700 p-4">
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xl">🔔</span>
-                  <h3 className="text-sm font-extrabold">チーム業務遅延（{teamOverdueAlerts.length}件）</h3>
-                </div>
-                {overdueAlerts.length === 0 && (
-                  <button
-                    onClick={() => setToastVisible(false)}
-                    className="text-white/80 hover:text-white text-lg leading-none"
-                    title="閉じる"
-                  >✕</button>
-                )}
-              </div>
-              <div className="space-y-1.5 max-h-[40vh] overflow-y-auto">
-                {(() => {
-                  // Group by member
-                  const byMember = new Map<string, typeof teamOverdueAlerts>();
-                  for (const a of teamOverdueAlerts) {
-                    if (!byMember.has(a.memberId)) byMember.set(a.memberId, []);
-                    byMember.get(a.memberId)!.push(a);
-                  }
-                  return Array.from(byMember.entries()).map(([mid, items]) => (
-                    <div key={mid} className="bg-orange-600/50 rounded px-2 py-1.5">
-                      <p className="text-xs font-bold mb-0.5">{items[0].memberName}さん</p>
-                      {items.map(a => (
-                        <div key={`${mid}-${a.blockIndex}`} className="flex items-start gap-2 text-[11px] ml-2">
-                          <span className="w-1 h-1 rounded-full bg-white flex-shrink-0 mt-1.5" />
-                          <span>「{a.taskName}」— 予定 <strong>{a.scheduledTime}</strong> から30分超過</span>
-                        </div>
-                      ))}
-                    </div>
-                  ));
-                })()}
               </div>
             </div>
           )}
@@ -599,8 +507,8 @@ export default function HomePage() {
 
         {/* Task composition chart - 業務構成比 (above 郵送点数) */}
         {(() => {
-          const todayShifts = getShifts().filter(s => s.date === selectedDate);
-          const totalShiftMinutes = todayShifts.reduce((sum, s) => {
+          // Use memoized + deduped shiftsForDate for consistency with shift list page
+          const totalShiftMinutes = shiftsForDate.reduce((sum, s) => {
             const [sh, sm] = s.startTime.split(':').map(Number);
             const [eh, em] = s.endTime.split(':').map(Number);
             return sum + (eh * 60 + em - sh * 60 - sm);
@@ -812,7 +720,7 @@ export default function HomePage() {
                 );
               })}
             </div>
-            <p className="text-[10px] text-gray-400 mt-2">※ 編集は「引き継ぎ共有BOX」画面から行ってください</p>
+            <p className="text-[10px] text-gray-400 mt-2">※ 編集は「共有BOX」画面から行ってください</p>
           </div>
         )}
 

@@ -36,6 +36,17 @@ export default function AppProvider({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDateState] = useState(getToday());
 
+  // Restore selectedDate from localStorage on mount so it's shared across pages and reloads
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem('schedule_selected_date');
+      if (saved && /^\d{4}-\d{2}-\d{2}$/.test(saved)) {
+        setSelectedDateState(saved);
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     setCurrentUserIdState(getCurrentUser());
 
@@ -272,6 +283,8 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
   const handleSetSelectedDate = useCallback((date: string) => {
     setSelectedDateState(date);
+    // Persist to localStorage so both pages (and reloads) share the same date
+    try { if (typeof window !== 'undefined') localStorage.setItem('schedule_selected_date', date); } catch { /* ignore */ }
   }, []);
 
   const refreshMembers = useCallback(() => {

@@ -56,6 +56,7 @@ export interface ShippingRecord {
   creator: string; // optional - empty means not yet completed
   createdAt: string;
   carriedOver?: boolean; // true if this record was copied from previous day (prevents chain-carryover)
+  carriedFromId?: string; // id of the source record this was copied from (for dedup)
 }
 
 export interface ShiftEntry {
@@ -104,6 +105,7 @@ export interface HandoverRequest {
   completedBy?: string; // member id who marked it complete
   customerName?: string; // optional customer name
   scheduledTime?: string; // optional time (HH:MM) when handover should be handled
+  type?: 'handover' | 'important'; // 'handover' = 引き継ぎ, 'important' = 重要案件 (undefined treated as 'handover')
 }
 
 export interface MemberSummary {

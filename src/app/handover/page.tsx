@@ -9,15 +9,17 @@ import {
   getTaskDefinitions,
   getMonthlySchedules,
   setMonthlySchedules,
+  getDailyTasks,
   generateId,
   getMemberById,
   getToday,
+  getFixedTasks,
   TASK_CATEGORIES,
   DEFAULT_TASKS,
 } from '@/lib/store';
 import type { HandoverRequest, TaskDefinition, MonthlySchedule } from '@/lib/types';
 
-type TabKey = 'share' | 'list';
+type TabKey = 'new-handover' | 'handover-list' | 'new-important' | 'important-list' | 'member-tasks';
 
 export default function HandoverPage() {
   const { currentUserId, members, dataVersion } = useAppContext();
@@ -25,9 +27,9 @@ export default function HandoverPage() {
 
   const [items, setItemsState] = useState<HandoverRequest[]>([]);
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>(DEFAULT_TASKS);
-  const [tab, setTab] = useState<TabKey>('list');
+  const [tab, setTab] = useState<TabKey>('handover-list');
 
-  // Form state
+  // Shared form state (used by both 新規引き継ぎ and 新規重要案件)
   const [formTask, setFormTask] = useState('');
   const [formDate, setFormDate] = useState(() => {
     const d = new Date();
@@ -38,6 +40,9 @@ export default function HandoverPage() {
   const [formDetail, setFormDetail] = useState('');
   const [formCustomerName, setFormCustomerName] = useState('');
   const [formScheduledTime, setFormScheduledTime] = useState('');
+
+  // Member tasks tab date
+  const [memberTaskDate, setMemberTaskDate] = useState(getToday());
 
   const reload = useCallback(() => {
     setItemsState(getHandovers());
@@ -53,22 +58,28 @@ export default function HandoverPage() {
     }, {} as Record<string, TaskDefinition[]>);
   }, [taskDefs]);
 
-  // All shared items, newest first
+  // All active items (shared/approved), newest first
   const allItems = items
     .filter(i => i.status === 'shared' || i.status === 'approved')
     .sort((a, b) => b.createdAt - a.createdAt);
 
-  // Group by target date for display
-  const itemsByDate = useMemo(() => {
+  // Separate by type (backward compat: no type = 'handover')
+  const handoverItems = allItems.filter(i => !i.type || i.type === 'handover');
+  const importantItems = allItems.filter(i => i.type === 'important');
+
+  // Group by targetDate for display
+  function groupByDate(list: HandoverRequest[]) {
     const map = new Map<string, HandoverRequest[]>();
-    for (const item of allItems) {
+    for (const item of list) {
       const dateItems = map.get(item.targetDate) || [];
       dateItems.push(item);
       map.set(item.targetDate, dateItems);
     }
-    // Newest date first (descending)
     return Array.from(map.entries()).sort((a, b) => b[0].localeCompare(a[0]));
-  }, [allItems]);
+  }
+
+  const handoverByDate = useMemo(() => groupByDate(handoverItems), [handoverItems]);
+  const importantByDate = useMemo(() => groupByDate(importantItems), [importantItems]);
 
   function applyToMonthly(item: HandoverRequest) {
     const existing = getMonthlySchedules();
@@ -84,7 +95,15 @@ export default function HandoverPage() {
     setMonthlySchedules([...existing, ms]);
   }
 
-  function handleSubmit() {
+  function resetForm() {
+    setFormTask('');
+    setFormReason('');
+    setFormDetail('');
+    setFormCustomerName('');
+    setFormScheduledTime('');
+  }
+
+  function handleSubmit(type: 'handover' | 'important') {
     if (!currentUserId) {
       alert('ログインしてください');
       return;
@@ -107,25 +126,14 @@ export default function HandoverPage() {
       reviewedAt: 0,
       customerName: formCustomerName || undefined,
       scheduledTime: formScheduledTime || undefined,
+      type,
     };
     const all = [...getHandovers(), newItem];
     setHandovers(all);
     setItemsState(all);
-    // Auto-apply to monthly calendar
     applyToMonthly(newItem);
-    setFormTask('');
-    setFormReason('');
-    setFormDetail('');
-    setFormCustomerName('');
-    setFormScheduledTime('');
-    setTab('list');
-  }
-
-  function handleDelete(id: string) {
-    if (!confirm('この共有を削除しますか？')) return;
-    const all = getHandovers().filter(i => i.id !== id);
-    setHandovers(all);
-    setItemsState(all);
+    resetForm();
+    setTab(type === 'handover' ? 'handover-list' : 'important-list');
   }
 
   function formatDate(dateStr: string) {
@@ -133,36 +141,78 @@ export default function HandoverPage() {
     return d.toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' });
   }
 
+  // Member tasks: non-fixed daily tasks for selected date, grouped by member
+  const memberTaskRows = useMemo(() => {
+    const fixedSet = new Set(getFixedTasks());
+    const dailyTasks = getDailyTasks().filter(t => t.date === memberTaskDate && !fixedSet.has(t.taskName));
+    const byMember = new Map<string, typeof dailyTasks>();
+    for (const t of dailyTasks) {
+      const arr = byMember.get(t.assigneeId) || [];
+      arr.push(t);
+      byMember.set(t.assigneeId, arr);
+    }
+    return byMember;
+  }, [memberTaskDate, dataVersion]);
+
+  // Shared form JSX (reused for both 引き継ぎ and 重要案件 tabs)
+  const formLabel = tab === 'new-important' ? '重要案件' : '引き継ぎ';
+  const formBorderColor = tab === 'new-important' ? 'border-red-200' : 'border-green-200';
+  const formTitleColor = tab === 'new-important' ? 'text-red-700' : 'text-green-700';
+  const formBtnColor = tab === 'new-important' ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700';
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">引き継ぎ共有BOX</h1>
-            <p className="text-gray-500 text-sm mt-1">翌日以降への業務引き継ぎをチーム全員で共有します</p>
+            <h1 className="text-2xl font-bold text-gray-800">共有BOX</h1>
+            <p className="text-gray-500 text-sm mt-1">引き継ぎ・重要案件・メンバー業務をチームで共有します</p>
           </div>
         </div>
 
         {/* Tab switcher */}
-        <div className="flex border-b border-gray-200">
-          <button
-            onClick={() => setTab('share')}
-            className={`px-6 py-2 text-sm font-semibold border-b-2 transition-colors ${
-              tab === 'share' ? 'border-green-600 text-green-700' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >新規共有</button>
-          <button
-            onClick={() => setTab('list')}
-            className={`px-6 py-2 text-sm font-semibold border-b-2 transition-colors ${
-              tab === 'list' ? 'border-blue-600 text-blue-700' : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >共有一覧 {allItems.length > 0 && <span className="ml-1 text-[10px] bg-blue-100 text-blue-700 rounded-full px-1.5 py-0.5">{allItems.length}</span>}</button>
+        <div className="flex flex-wrap border-b border-gray-200 gap-0">
+          {([
+            { key: 'new-handover', label: '新規引き継ぎ', color: 'green', count: null },
+            { key: 'handover-list', label: '引き継ぎ一覧', color: 'blue', count: handoverItems.length },
+            { key: 'new-important', label: '新規重要案件', color: 'red', count: null },
+            { key: 'important-list', label: '重要案件一覧', color: 'orange', count: importantItems.length },
+            { key: 'member-tasks', label: 'メンバー別タスク', color: 'purple', count: null },
+          ] as { key: TabKey; label: string; color: string; count: number | null }[]).map(({ key, label, color, count }) => {
+            const activeColors: Record<string, string> = {
+              green: 'border-green-600 text-green-700',
+              blue: 'border-blue-600 text-blue-700',
+              red: 'border-red-600 text-red-700',
+              orange: 'border-orange-500 text-orange-700',
+              purple: 'border-purple-600 text-purple-700',
+            };
+            const badgeColors: Record<string, string> = {
+              blue: 'bg-blue-100 text-blue-700',
+              orange: 'bg-orange-100 text-orange-700',
+            };
+            return (
+              <button
+                key={key}
+                onClick={() => setTab(key)}
+                className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
+                  tab === key ? activeColors[color] : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                {label}
+                {count !== null && count > 0 && (
+                  <span className={`ml-1 text-[10px] rounded-full px-1.5 py-0.5 ${badgeColors[color] || 'bg-gray-100 text-gray-600'}`}>
+                    {count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Share Tab (form) */}
-        {tab === 'share' && (
-          <div className="bg-white rounded-xl shadow-sm border border-green-200 p-6 space-y-4">
-            <h3 className="text-sm font-bold text-green-700">新規引き継ぎ共有</h3>
+        {/* New Handover / New Important form (shared) */}
+        {(tab === 'new-handover' || tab === 'new-important') && (
+          <div className={`bg-white rounded-xl shadow-sm border ${formBorderColor} p-6 space-y-4`}>
+            <h3 className={`text-sm font-bold ${formTitleColor}`}>新規{formLabel}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">対象日 <span className="text-red-500">*</span></label>
@@ -219,12 +269,14 @@ export default function HandoverPage() {
                 />
               </div>
               <div className="md:col-span-2">
-                <label className="block text-xs font-semibold text-gray-600 mb-1">引き継ぎ理由</label>
+                <label className="block text-xs font-semibold text-gray-600 mb-1">
+                  {tab === 'new-important' ? '案件概要・理由' : '引き継ぎ理由'}
+                </label>
                 <input
                   type="text"
                   value={formReason}
                   onChange={e => setFormReason(e.target.value)}
-                  placeholder="例: 当日完了できず翌日に持ち越し"
+                  placeholder={tab === 'new-important' ? '例: 重要顧客・期限あり' : '例: 当日完了できず翌日に持ち越し'}
                   className="w-full border rounded-lg px-3 py-2 text-sm"
                 />
               </div>
@@ -241,44 +293,149 @@ export default function HandoverPage() {
             </div>
             <div className="flex justify-end">
               <button
-                onClick={handleSubmit}
+                onClick={() => handleSubmit(tab === 'new-important' ? 'important' : 'handover')}
                 disabled={!formTask || !formDate}
-                className="px-6 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
+                className={`px-6 py-2 ${formBtnColor} text-white text-sm font-semibold rounded-lg disabled:opacity-50`}
               >共有する</button>
             </div>
           </div>
         )}
 
-        {/* List Tab - All shared items grouped by date */}
-        {tab === 'list' && (
+        {/* 引き継ぎ一覧 */}
+        {tab === 'handover-list' && (
+          <ItemList
+            itemsByDate={handoverByDate}
+            emptyText="引き継ぎはありません。「新規引き継ぎ」から作成してください。"
+            formatDate={formatDate}
+            currentUserId={currentUserId}
+            taskDefs={taskDefs}
+            tasksByCategory={tasksByCategory}
+            onReload={reload}
+          />
+        )}
+
+        {/* 重要案件一覧 */}
+        {tab === 'important-list' && (
+          <ItemList
+            itemsByDate={importantByDate}
+            emptyText="重要案件はありません。「新規重要案件」から作成してください。"
+            formatDate={formatDate}
+            currentUserId={currentUserId}
+            taskDefs={taskDefs}
+            tasksByCategory={tasksByCategory}
+            onReload={reload}
+            isImportant
+          />
+        )}
+
+        {/* メンバー別タスク */}
+        {tab === 'member-tasks' && (
           <div className="space-y-4">
-            {allItems.length === 0 ? (
+            <div className="flex items-center gap-3">
+              <label className="text-sm font-semibold text-gray-700">表示日:</label>
+              <input
+                type="date"
+                value={memberTaskDate}
+                onChange={e => setMemberTaskDate(e.target.value)}
+                className="border rounded-lg px-3 py-1.5 text-sm"
+              />
+              <span className="text-xs text-gray-500">固定業務以外のタスクを表示</span>
+            </div>
+            {memberTaskRows.size === 0 ? (
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center text-gray-400">
-                共有された引き継ぎはありません。「新規共有」から作成してください。
+                {memberTaskDate} の非固定タスクはありません。
               </div>
             ) : (
-              itemsByDate.map(([date, dateItems]) => {
-                const isPast = date < getToday();
-                return (
-                <HandoverDateGroup
-                  key={date}
-                  date={date}
-                  dateItems={dateItems}
-                  isPast={isPast}
-                  formatDate={formatDate}
-                  currentUserId={currentUserId}
-                  taskDefs={taskDefs}
-                  tasksByCategory={tasksByCategory}
-                  onReload={reload}
-                />
-                );
-              })
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                {members.map(m => {
+                  const tasks = memberTaskRows.get(m.id) || [];
+                  if (tasks.length === 0) return null;
+                  return (
+                    <div key={m.id} className="bg-white rounded-xl shadow-sm border border-purple-100 overflow-hidden">
+                      <div className="bg-purple-50 border-b border-purple-100 px-4 py-2 flex items-center justify-between">
+                        <span className="text-sm font-bold text-purple-800">{m.name}</span>
+                        <span className="text-[10px] bg-purple-200 text-purple-800 rounded-full px-2 py-0.5">{tasks.length}件</span>
+                      </div>
+                      <div className="divide-y divide-gray-50">
+                        {tasks.map(t => (
+                          <div key={t.id} className="px-4 py-2.5">
+                            <div className="flex justify-between items-start">
+                              <span className="text-xs font-semibold text-gray-700 flex-1 mr-2">{t.taskName}</span>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${
+                                t.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
+                                t.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-600'
+                              }`}>
+                                {t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '予定'}
+                              </span>
+                            </div>
+                            <div className="flex gap-3 mt-1 text-[10px] text-gray-500">
+                              {t.startTime && <span>🕐 {t.startTime}〜{t.endTime}</span>}
+                              <span>予定 {t.plannedCount}件 / {Math.round(t.plannedMinutes)}分</span>
+                              {t.actualCount > 0 && <span className="text-emerald-600">実績 {t.actualCount}件</span>}
+                            </div>
+                            {t.comment && <p className="text-[10px] text-gray-500 mt-1 truncate">💬 {t.comment}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             )}
           </div>
         )}
-
       </div>
     </DashboardLayout>
+  );
+}
+
+// ===== Shared List Component =====
+function ItemList({
+  itemsByDate,
+  emptyText,
+  formatDate,
+  currentUserId,
+  taskDefs,
+  tasksByCategory,
+  onReload,
+  isImportant = false,
+}: {
+  itemsByDate: [string, HandoverRequest[]][];
+  emptyText: string;
+  formatDate: (d: string) => string;
+  currentUserId: string;
+  taskDefs: TaskDefinition[];
+  tasksByCategory: Record<string, TaskDefinition[]>;
+  onReload: () => void;
+  isImportant?: boolean;
+}) {
+  return (
+    <div className="space-y-4">
+      {itemsByDate.length === 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center text-gray-400">
+          {emptyText}
+        </div>
+      ) : (
+        itemsByDate.map(([date, dateItems]) => {
+          const isPast = date < getToday();
+          return (
+            <HandoverDateGroup
+              key={date}
+              date={date}
+              dateItems={dateItems}
+              isPast={isPast}
+              formatDate={formatDate}
+              currentUserId={currentUserId}
+              taskDefs={taskDefs}
+              tasksByCategory={tasksByCategory}
+              onReload={onReload}
+              isImportant={isImportant}
+            />
+          );
+        })
+      )}
+    </div>
   );
 }
 
@@ -292,6 +449,7 @@ function HandoverDateGroup({
   taskDefs,
   tasksByCategory,
   onReload,
+  isImportant = false,
 }: {
   date: string;
   dateItems: HandoverRequest[];
@@ -301,22 +459,31 @@ function HandoverDateGroup({
   taskDefs: TaskDefinition[];
   tasksByCategory: Record<string, TaskDefinition[]>;
   onReload: () => void;
+  isImportant?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(!isPast); // today/future auto-expanded, past collapsed
+  const [expanded, setExpanded] = useState(!isPast);
+  const headerBg = isImportant
+    ? (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-red-50 border-b border-red-100')
+    : (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-blue-50 border-b border-blue-100');
+  const headerText = isImportant
+    ? (isPast ? 'text-gray-600' : 'text-red-700')
+    : (isPast ? 'text-gray-600' : 'text-blue-700');
+  const badgeClass = isImportant
+    ? (isPast ? 'bg-gray-200 text-gray-600' : 'bg-red-100 text-red-700')
+    : (isPast ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700');
+
   return (
     <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${isPast ? 'border-gray-200' : 'border-gray-100'}`}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className={`w-full px-5 py-3 flex items-center justify-between hover:bg-opacity-80 transition-colors ${
-          isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-blue-50 border-b border-blue-100'
-        }`}
+        className={`w-full px-5 py-3 flex items-center justify-between hover:bg-opacity-80 transition-colors ${headerBg}`}
       >
         <div className="flex items-center gap-3">
           <span className={`text-xs ${expanded ? '' : 'rotate-[-90deg]'} transition-transform`}>▼</span>
-          <h3 className={`text-sm font-bold ${isPast ? 'text-gray-600' : 'text-blue-700'}`}>
-            📅 {formatDate(date)}（{date}）
+          <h3 className={`text-sm font-bold ${headerText}`}>
+            {isImportant ? '🔴' : '📅'} {formatDate(date)}（{date}）
           </h3>
-          <span className={`text-[10px] px-2 py-0.5 rounded-full ${isPast ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700'}`}>
+          <span className={`text-[10px] px-2 py-0.5 rounded-full ${badgeClass}`}>
             {dateItems.length}件
           </span>
           {isPast && <span className="text-[10px] text-gray-400">過去</span>}
@@ -332,6 +499,7 @@ function HandoverDateGroup({
               taskDefs={taskDefs}
               tasksByCategory={tasksByCategory}
               onReload={onReload}
+              isImportant={isImportant}
             />
           ))}
         </div>
@@ -347,12 +515,14 @@ function HandoverItemRow({
   taskDefs,
   tasksByCategory,
   onReload,
+  isImportant = false,
 }: {
   item: HandoverRequest;
   currentUserId: string;
   taskDefs: TaskDefinition[];
   tasksByCategory: Record<string, TaskDefinition[]>;
   onReload: () => void;
+  isImportant?: boolean;
 }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editTask, setEditTask] = useState(item.taskName);
@@ -363,6 +533,9 @@ function HandoverItemRow({
   const applicant = getMemberById(item.applicantId);
   const isOwn = item.applicantId === currentUserId;
   const isCompleted = !!item.completed;
+
+  // Suppress unused var (taskDefs reserved for future use)
+  void taskDefs;
 
   function handleSave() {
     if (!editTask || !editDate) {
@@ -399,9 +572,6 @@ function HandoverItemRow({
     onReload();
   }
 
-  // Suppress unused var (taskDefs reserved for future use)
-  void taskDefs;
-
   if (isEditing) {
     return (
       <div className="px-5 py-4 bg-yellow-50/50">
@@ -428,7 +598,9 @@ function HandoverItemRow({
             </select>
           </div>
           <div className="md:col-span-2">
-            <label className="block text-[10px] font-semibold text-gray-600 mb-1">理由</label>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">
+              {isImportant ? '案件概要・理由' : '引き継ぎ理由'}
+            </label>
             <input type="text" value={editReason} onChange={e => setEditReason(e.target.value)}
               className="w-full border rounded px-2 py-1 text-xs" />
           </div>
@@ -440,14 +612,14 @@ function HandoverItemRow({
         </div>
         <div className="flex justify-end gap-2 mt-2">
           <button onClick={() => setIsEditing(false)} className="px-3 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
-          <button onClick={handleSave} className="px-4 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded">保存</button>
+          <button onClick={handleSave} className={`px-4 py-1 text-xs text-white rounded ${isImportant ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700'}`}>保存</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div className={`px-5 py-4 ${isCompleted ? 'bg-gray-50 opacity-60' : isOwn ? 'bg-green-50/30' : ''}`}>
+    <div className={`px-5 py-4 ${isCompleted ? 'bg-gray-50 opacity-60' : isOwn ? (isImportant ? 'bg-red-50/20' : 'bg-green-50/30') : ''}`}>
       <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
         <div className="flex-1 space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -460,6 +632,8 @@ function HandoverItemRow({
             />
             {isCompleted ? (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-200 text-gray-600">完了</span>
+            ) : isImportant ? (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">🔴 重要</span>
             ) : (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">共有済</span>
             )}

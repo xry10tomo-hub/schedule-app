@@ -206,8 +206,14 @@ export default function DailyPage() {
 
   useEffect(() => { loadTasks(); }, [loadTasks]);
 
-  // Shifts for selected date
-  const shiftsForDate = getShifts().filter(s => s.date === selectedDate);
+  // Shifts for selected date — memoized + deduped by memberId for consistency with shift list
+  const shiftsForDate = useMemo(() => {
+    const all = getShifts().filter(s => s.date === selectedDate);
+    const byMember = new Map<string, ShiftEntry>();
+    for (const s of all) byMember.set(s.memberId, s);
+    return Array.from(byMember.values());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDate, dataVersion]);
 
   // Members active on this date: those with shifts OR who have timeline/actual data
   const activeMembers = useMemo(() => {

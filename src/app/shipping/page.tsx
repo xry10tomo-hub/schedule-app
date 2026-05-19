@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import NumberInput from '@/components/NumberInput';
 import { useAppContext, getShippingRecords, setShippingRecords, getDailyTasks, getActualPerformanceForDate, setActualPerformanceForDate, generateId, exportToCSV, fmtNum } from '@/lib/store';
@@ -28,88 +28,44 @@ export default function ShippingPage() {
     setRecordsState(getShippingRecords().filter(r => r.date === selectedDate));
   }, [selectedDate, dataVersion]);
 
-  // Carry over unfinished records (creator empty) from previous day to today
-  // - Only carries records that are NOT themselves carried-over (carriedOver !== true)
-  // - Marks copied records as carriedOver: true to prevent chain carryover
-  // - One-time cleanup: marks all existing unfinished records as carriedOver to stop current chain
-  const carriedOverRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    if (carriedOverRef.current.has(selectedDate)) return;
+  useEffect(() => { loadRecords(); }, [loadRecords]);
 
-    const all = getShippingRecords();
-
-    // ========== One-time cleanup: stop the current carryover chain ==========
-    // Mark all existing records (empty creator, no carriedOver flag) as carriedOver: true
-    const cleanupFlagKey = 'schedule_shipping_chain_cleanup_v1';
-    const cleanupDone = localStorage.getItem(cleanupFlagKey) === 'true';
-    let workingAll = all;
-    if (!cleanupDone) {
-      const cleaned = all.map(r => {
-        if (!r.creator && r.carriedOver === undefined) {
-          return { ...r, carriedOver: true };
-        }
-        return r;
-      });
-      setShippingRecords(cleaned);
-      workingAll = cleaned;
-      localStorage.setItem(cleanupFlagKey, 'true');
-    }
-
-    // ========== Persistent per-date flag ==========
-    const flagKey = 'schedule_shipping_carryover_done';
-    let processed: string[] = [];
-    try { processed = JSON.parse(localStorage.getItem(flagKey) || '[]'); } catch { processed = []; }
-    if (processed.includes(selectedDate)) {
-      carriedOverRef.current.add(selectedDate);
-      if (!cleanupDone) loadRecords();
+  // Manual carryover: move today's unfinished 予定 records to the next day
+  function handleCarryToNextDay() {
+    const planRecords = records.filter(r => !r.creator || r.creator.trim() === '');
+    if (planRecords.length === 0) {
+      alert('予定に移動できる記録がありません');
       return;
     }
+    const next = new Date(selectedDate + 'T00:00:00');
+    next.setDate(next.getDate() + 1);
+    const nextDateStr = next.toLocaleDateString('en-CA');
 
-    // Calculate previous day
-    const prev = new Date(selectedDate + 'T00:00:00');
-    prev.setDate(prev.getDate() - 1);
-    const prevDateStr = prev.toLocaleDateString('en-CA');
-
-    // Only carry records that:
-    // - are on the previous day
-    // - have empty creator (unfinished)
-    // - are NOT themselves carried-over (carriedOver !== true)
-    const unfinishedPrev = workingAll.filter(r =>
-      r.date === prevDateStr && !r.creator && r.carriedOver !== true
+    const all = getShippingRecords();
+    const nextDayRecords = all.filter(r => r.date === nextDateStr);
+    const carriedSourceIds = new Set(
+      nextDayRecords.map(t => t.carriedFromId).filter((id): id is string => typeof id === 'string')
     );
 
-    if (unfinishedPrev.length > 0) {
-      const todayRecords = workingAll.filter(r => r.date === selectedDate);
-      const toCarry: ShippingRecord[] = [];
-      for (const r of unfinishedPrev) {
-        const dup = todayRecords.find(t => t.carrier === r.carrier && t.points === r.points && (t.dayType || '当日') === (r.dayType || '当日') && !t.creator);
-        if (!dup) {
-          toCarry.push({
-            ...r,
-            id: generateId(),
-            date: selectedDate,
-            createdAt: new Date().toISOString(),
-            carriedOver: true, // Mark copy so it won't be carried again
-          });
-        }
-      }
-      if (toCarry.length > 0) {
-        setShippingRecords([...workingAll, ...toCarry]);
-        loadRecords();
-      } else if (!cleanupDone) {
-        loadRecords();
-      }
-    } else if (!cleanupDone) {
-      loadRecords();
+    const toCarry: ShippingRecord[] = [];
+    for (const r of planRecords) {
+      if (carriedSourceIds.has(r.id)) continue;
+      toCarry.push({
+        ...r,
+        id: generateId(),
+        date: nextDateStr,
+        createdAt: new Date().toISOString(),
+        carriedOver: true,
+        carriedFromId: r.id,
+      });
     }
-
-    // Mark date as processed (persistent)
-    processed.push(selectedDate);
-    localStorage.setItem(flagKey, JSON.stringify(processed.slice(-90))); // keep last 90 days
-    carriedOverRef.current.add(selectedDate);
-  }, [selectedDate, loadRecords]);
-
-  useEffect(() => { loadRecords(); }, [loadRecords]);
+    if (toCarry.length === 0) {
+      alert('すでに翌日（' + nextDateStr + '）に移動済みです');
+      return;
+    }
+    setShippingRecords([...all, ...toCarry]);
+    alert(toCarry.length + '件を翌日（' + nextDateStr + '）に移動しました');
+  }
 
   // Sync shipping creators to home performance data for 【査定】計算書作成
   function syncCreatorToPerformance() {
@@ -288,6 +244,11 @@ export default function ShippingPage() {
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{selectedDate}</span>
+              <button
+                onClick={handleCarryToNextDay}
+                className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+                title="予定（作成者未入力）の記録を翌日にコピーします"
+              >📤 翌日の郵送点数に移動</button>
               <button onClick={handleExportCSV} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">CSV出力</button>
             </div>
             {/* 郵便局AM率（右上コンパクト） */}
@@ -428,8 +389,11 @@ export default function ShippingPage() {
 
         {/* Records Table - split into 予定 (left) / 実績 (right) */}
         {(() => {
-          const planRecords = records.filter(r => !r.creator);
-          const doneRecords = records.filter(r => !!r.creator);
+          // Strict split based on creator field
+          // 予定 (plan) = no creator entered
+          // 実績 (done) = creator entered (any non-empty value)
+          const planRecords = records.filter(r => !r.creator || r.creator.trim() === '');
+          const doneRecords = records.filter(r => !!r.creator && r.creator.trim() !== '');
           const planPts = planRecords.reduce((s, r) => s + r.points, 0);
           const donePts = doneRecords.reduce((s, r) => s + r.points, 0);
 
