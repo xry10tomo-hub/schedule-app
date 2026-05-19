@@ -12,6 +12,7 @@ import type {
   TaskDefinition,
   TaskResource,
   HandoverRequest,
+  MemberTask,
 } from './types';
 
 // ============ Default Data ============
@@ -304,6 +305,7 @@ export const STORAGE_KEYS = {
   fixedTasks: 'schedule_fixed_tasks',
   fixedTaskDefaults: 'schedule_fixed_task_defaults',
   taskAssignments: 'schedule_task_assignments',
+  memberTasks: 'schedule_member_tasks',
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -322,6 +324,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.fixedTasks,
   STORAGE_KEYS.fixedTaskDefaults,
   STORAGE_KEYS.taskAssignments,
+  STORAGE_KEYS.memberTasks,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {
@@ -738,6 +741,14 @@ export function getHandovers(): HandoverRequest[] {
 }
 export function setHandovers(items: HandoverRequest[]) {
   setToStorage(STORAGE_KEYS.handovers, items);
+}
+
+// ============ Member Tasks (メンバー別特別業務) ============
+export function getMemberTasks(): MemberTask[] {
+  return getFromStorage(STORAGE_KEYS.memberTasks, []);
+}
+export function setMemberTasks(tasks: MemberTask[]) {
+  setToStorage(STORAGE_KEYS.memberTasks, tasks);
 }
 
 export function getCurrentUser(): string {

@@ -9,15 +9,15 @@ import {
   getTaskDefinitions,
   getMonthlySchedules,
   setMonthlySchedules,
-  getDailyTasks,
+  getMemberTasks,
+  setMemberTasks,
   generateId,
   getMemberById,
   getToday,
-  getFixedTasks,
   TASK_CATEGORIES,
   DEFAULT_TASKS,
 } from '@/lib/store';
-import type { HandoverRequest, TaskDefinition, MonthlySchedule } from '@/lib/types';
+import type { HandoverRequest, TaskDefinition, MonthlySchedule, MemberTask, MemberTaskPriority, MemberTaskStatus } from '@/lib/types';
 
 type TabKey = 'new-handover' | 'handover-list' | 'new-important' | 'important-list' | 'member-tasks';
 
@@ -26,6 +26,7 @@ export default function HandoverPage() {
   const currentMember = members.find(m => m.id === currentUserId);
 
   const [items, setItemsState] = useState<HandoverRequest[]>([]);
+  const [memberTaskItems, setMemberTaskItems] = useState<MemberTask[]>([]);
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [tab, setTab] = useState<TabKey>('handover-list');
 
@@ -41,12 +42,23 @@ export default function HandoverPage() {
   const [formCustomerName, setFormCustomerName] = useState('');
   const [formScheduledTime, setFormScheduledTime] = useState('');
 
-  // Member tasks tab date
-  const [memberTaskDate, setMemberTaskDate] = useState(getToday());
+  // Member tasks tab state
+  const [showMemberTaskForm, setShowMemberTaskForm] = useState(false);
+  const [mtFilterAssignee, setMtFilterAssignee] = useState('');
+  const [mtFilterStatus, setMtFilterStatus] = useState<MemberTaskStatus | ''>('');
+  // New member task form
+  const [mtAssigneeId, setMtAssigneeId] = useState('');
+  const [mtTaskContent, setMtTaskContent] = useState('');
+  const [mtDetail, setMtDetail] = useState('');
+  const [mtPlannedDate, setMtPlannedDate] = useState(getToday());
+  const [mtPriority, setMtPriority] = useState<MemberTaskPriority>('medium');
+  const [mtStatus, setMtStatus] = useState<MemberTaskStatus>('pending');
+  const [mtNote, setMtNote] = useState('');
 
   const reload = useCallback(() => {
     setItemsState(getHandovers());
     setTaskDefs(getTaskDefinitions());
+    setMemberTaskItems(getMemberTasks());
   }, []);
 
   useEffect(() => { reload(); }, [reload, dataVersion]);
@@ -141,18 +153,52 @@ export default function HandoverPage() {
     return d.toLocaleDateString('ja-JP', { month: 'long', day: 'numeric', weekday: 'short' });
   }
 
-  // Member tasks: non-fixed daily tasks for selected date, grouped by member
-  const memberTaskRows = useMemo(() => {
-    const fixedSet = new Set(getFixedTasks());
-    const dailyTasks = getDailyTasks().filter(t => t.date === memberTaskDate && !fixedSet.has(t.taskName));
-    const byMember = new Map<string, typeof dailyTasks>();
-    for (const t of dailyTasks) {
-      const arr = byMember.get(t.assigneeId) || [];
-      arr.push(t);
-      byMember.set(t.assigneeId, arr);
+  // Member task helpers
+  function handleMemberTaskSubmit() {
+    if (!mtAssigneeId || !mtTaskContent || !mtPlannedDate) {
+      alert('担当者・業務内容・完了日（予定）を入力してください');
+      return;
     }
-    return byMember;
-  }, [memberTaskDate, dataVersion]);
+    const newTask: MemberTask = {
+      id: generateId(),
+      assigneeId: mtAssigneeId,
+      creatorId: currentUserId,
+      taskContent: mtTaskContent,
+      detail: mtDetail,
+      plannedCompletionDate: mtPlannedDate,
+      priority: mtPriority,
+      status: mtStatus,
+      createdAt: Date.now(),
+      note: mtNote || undefined,
+    };
+    const all = [...getMemberTasks(), newTask];
+    setMemberTasks(all);
+    setMemberTaskItems(all);
+    // Reset form
+    setMtAssigneeId('');
+    setMtTaskContent('');
+    setMtDetail('');
+    setMtPlannedDate(getToday());
+    setMtPriority('medium');
+    setMtStatus('pending');
+    setMtNote('');
+    setShowMemberTaskForm(false);
+  }
+
+  // Filtered member tasks for display
+  const filteredMemberTasks = useMemo(() => {
+    let list = [...memberTaskItems];
+    if (mtFilterAssignee) list = list.filter(t => t.assigneeId === mtFilterAssignee);
+    if (mtFilterStatus) list = list.filter(t => t.status === mtFilterStatus);
+    // Sort: priority (high→medium→low), then plannedCompletionDate asc
+    const pOrder: Record<MemberTaskPriority, number> = { high: 0, medium: 1, low: 2 };
+    list.sort((a, b) => {
+      const pd = pOrder[a.priority] - pOrder[b.priority];
+      if (pd !== 0) return pd;
+      return a.plannedCompletionDate.localeCompare(b.plannedCompletionDate);
+    });
+    return list;
+  }, [memberTaskItems, mtFilterAssignee, mtFilterStatus]);
 
   // Shared form JSX (reused for both 引き継ぎ and 重要案件 tabs)
   const formLabel = tab === 'new-important' ? '重要案件' : '引き継ぎ';
@@ -331,56 +377,114 @@ export default function HandoverPage() {
         {/* メンバー別タスク */}
         {tab === 'member-tasks' && (
           <div className="space-y-4">
-            <div className="flex items-center gap-3">
-              <label className="text-sm font-semibold text-gray-700">表示日:</label>
-              <input
-                type="date"
-                value={memberTaskDate}
-                onChange={e => setMemberTaskDate(e.target.value)}
+            {/* Header: filter + add button */}
+            <div className="flex flex-wrap items-center gap-3">
+              <select
+                value={mtFilterAssignee}
+                onChange={e => setMtFilterAssignee(e.target.value)}
                 className="border rounded-lg px-3 py-1.5 text-sm"
-              />
-              <span className="text-xs text-gray-500">固定業務以外のタスクを表示</span>
+              >
+                <option value="">全担当者</option>
+                {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+              <select
+                value={mtFilterStatus}
+                onChange={e => setMtFilterStatus(e.target.value as MemberTaskStatus | '')}
+                className="border rounded-lg px-3 py-1.5 text-sm"
+              >
+                <option value="">全ステータス</option>
+                <option value="pending">未着手</option>
+                <option value="in_progress">進行中</option>
+                <option value="completed">完了</option>
+              </select>
+              <span className="text-xs text-gray-500 ml-auto">{filteredMemberTasks.length}件</span>
+              <button
+                onClick={() => setShowMemberTaskForm(v => !v)}
+                className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold transition-colors"
+              >{showMemberTaskForm ? 'キャンセル' : '＋ 新規登録'}</button>
             </div>
-            {memberTaskRows.size === 0 ? (
+
+            {/* New task form */}
+            {showMemberTaskForm && (
+              <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5 space-y-4">
+                <h3 className="text-sm font-bold text-purple-700">新規タスク登録</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">担当者 <span className="text-red-500">*</span></label>
+                    <select value={mtAssigneeId} onChange={e => setMtAssigneeId(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm">
+                      <option value="">選択してください</option>
+                      {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">完了日（予定）<span className="text-red-500">*</span></label>
+                    <input type="date" value={mtPlannedDate} onChange={e => setMtPlannedDate(e.target.value)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">業務内容 <span className="text-red-500">*</span></label>
+                    <input type="text" value={mtTaskContent} onChange={e => setMtTaskContent(e.target.value)}
+                      placeholder="例: ○○顧客の見積書作成、リスト整理など"
+                      className="w-full border rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">詳細・内容</label>
+                    <textarea value={mtDetail} onChange={e => setMtDetail(e.target.value)}
+                      placeholder="具体的な作業内容・手順・注意点など"
+                      rows={3} className="w-full border rounded-lg px-3 py-2 text-sm resize-y" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">優先度</label>
+                    <select value={mtPriority} onChange={e => setMtPriority(e.target.value as MemberTaskPriority)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm">
+                      <option value="high">🔴 高</option>
+                      <option value="medium">🟡 中</option>
+                      <option value="low">🟢 低</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">ステータス</label>
+                    <select value={mtStatus} onChange={e => setMtStatus(e.target.value as MemberTaskStatus)}
+                      className="w-full border rounded-lg px-3 py-2 text-sm">
+                      <option value="pending">未着手</option>
+                      <option value="in_progress">進行中</option>
+                      <option value="completed">完了</option>
+                    </select>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">備考</label>
+                    <input type="text" value={mtNote} onChange={e => setMtNote(e.target.value)}
+                      placeholder="関連URL・補足情報など"
+                      className="w-full border rounded-lg px-3 py-2 text-sm" />
+                  </div>
+                </div>
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleMemberTaskSubmit}
+                    disabled={!mtAssigneeId || !mtTaskContent || !mtPlannedDate}
+                    className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
+                  >登録する</button>
+                </div>
+              </div>
+            )}
+
+            {/* Task list */}
+            {filteredMemberTasks.length === 0 ? (
               <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-12 text-center text-gray-400">
-                {memberTaskDate} の非固定タスクはありません。
+                タスクがありません。「＋ 新規登録」から追加してください。
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {members.map(m => {
-                  const tasks = memberTaskRows.get(m.id) || [];
-                  if (tasks.length === 0) return null;
-                  return (
-                    <div key={m.id} className="bg-white rounded-xl shadow-sm border border-purple-100 overflow-hidden">
-                      <div className="bg-purple-50 border-b border-purple-100 px-4 py-2 flex items-center justify-between">
-                        <span className="text-sm font-bold text-purple-800">{m.name}</span>
-                        <span className="text-[10px] bg-purple-200 text-purple-800 rounded-full px-2 py-0.5">{tasks.length}件</span>
-                      </div>
-                      <div className="divide-y divide-gray-50">
-                        {tasks.map(t => (
-                          <div key={t.id} className="px-4 py-2.5">
-                            <div className="flex justify-between items-start">
-                              <span className="text-xs font-semibold text-gray-700 flex-1 mr-2">{t.taskName}</span>
-                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex-shrink-0 ${
-                                t.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
-                                t.status === 'in_progress' ? 'bg-blue-100 text-blue-700' :
-                                'bg-gray-100 text-gray-600'
-                              }`}>
-                                {t.status === 'completed' ? '完了' : t.status === 'in_progress' ? '進行中' : '予定'}
-                              </span>
-                            </div>
-                            <div className="flex gap-3 mt-1 text-[10px] text-gray-500">
-                              {t.startTime && <span>🕐 {t.startTime}〜{t.endTime}</span>}
-                              <span>予定 {t.plannedCount}件 / {Math.round(t.plannedMinutes)}分</span>
-                              {t.actualCount > 0 && <span className="text-emerald-600">実績 {t.actualCount}件</span>}
-                            </div>
-                            {t.comment && <p className="text-[10px] text-gray-500 mt-1 truncate">💬 {t.comment}</p>}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="space-y-3">
+                {filteredMemberTasks.map(task => (
+                  <MemberTaskRow
+                    key={task.id}
+                    task={task}
+                    members={members}
+                    currentUserId={currentUserId}
+                    onReload={reload}
+                  />
+                ))}
               </div>
             )}
           </div>
@@ -663,6 +767,217 @@ function HandoverItemRow({
           </p>
         </div>
         {isOwn && !isCompleted && (
+          <div className="flex gap-2 flex-shrink-0">
+            <button onClick={() => setIsEditing(true)} className="text-blue-400 hover:text-blue-600 text-xs">編集</button>
+            <button onClick={handleDelete} className="text-red-400 hover:text-red-600 text-xs">削除</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ===== MemberTask Row Component =====
+const PRIORITY_LABEL: Record<MemberTaskPriority, string> = { high: '🔴 高', medium: '🟡 中', low: '🟢 低' };
+const PRIORITY_CLASS: Record<MemberTaskPriority, string> = {
+  high: 'bg-red-100 text-red-700',
+  medium: 'bg-yellow-100 text-yellow-700',
+  low: 'bg-green-100 text-green-700',
+};
+const STATUS_LABEL: Record<MemberTaskStatus, string> = { pending: '未着手', in_progress: '進行中', completed: '完了' };
+const STATUS_CLASS: Record<MemberTaskStatus, string> = {
+  pending: 'bg-gray-100 text-gray-600',
+  in_progress: 'bg-blue-100 text-blue-700',
+  completed: 'bg-emerald-100 text-emerald-700',
+};
+
+function MemberTaskRow({
+  task,
+  members,
+  currentUserId,
+  onReload,
+}: {
+  task: MemberTask;
+  members: import('@/lib/types').Member[];
+  currentUserId: string;
+  onReload: () => void;
+}) {
+  const [isEditing, setIsEditing] = useState(false);
+  const [editContent, setEditContent] = useState(task.taskContent);
+  const [editDetail, setEditDetail] = useState(task.detail);
+  const [editDate, setEditDate] = useState(task.plannedCompletionDate);
+  const [editPriority, setEditPriority] = useState<MemberTaskPriority>(task.priority);
+  const [editStatus, setEditStatus] = useState<MemberTaskStatus>(task.status);
+  const [editNote, setEditNote] = useState(task.note || '');
+  const [editAssigneeId, setEditAssigneeId] = useState(task.assigneeId);
+
+  const assignee = members.find(m => m.id === task.assigneeId);
+  const creator = members.find(m => m.id === task.creatorId);
+  const isOwn = task.creatorId === currentUserId;
+  const isCompleted = task.status === 'completed';
+  const isOverdue = !isCompleted && task.plannedCompletionDate < getToday();
+
+  function handleSave() {
+    if (!editContent || !editDate || !editAssigneeId) {
+      alert('担当者・業務内容・完了日を入力してください');
+      return;
+    }
+    const all = getMemberTasks().map(t => t.id === task.id ? {
+      ...t,
+      assigneeId: editAssigneeId,
+      taskContent: editContent,
+      detail: editDetail,
+      plannedCompletionDate: editDate,
+      priority: editPriority,
+      status: editStatus,
+      note: editNote || undefined,
+      completedAt: editStatus === 'completed' && t.status !== 'completed' ? Date.now() : t.completedAt,
+    } : t);
+    setMemberTasks(all);
+    setIsEditing(false);
+    onReload();
+  }
+
+  function handleDelete() {
+    if (!confirm('このタスクを削除しますか？')) return;
+    const all = getMemberTasks().filter(t => t.id !== task.id);
+    setMemberTasks(all);
+    onReload();
+  }
+
+  function handleStatusChange(newStatus: MemberTaskStatus) {
+    const all = getMemberTasks().map(t => t.id === task.id ? {
+      ...t,
+      status: newStatus,
+      completedAt: newStatus === 'completed' ? Date.now() : t.completedAt,
+    } : t);
+    setMemberTasks(all);
+    onReload();
+  }
+
+  if (isEditing) {
+    return (
+      <div className="bg-yellow-50 rounded-xl border border-yellow-200 p-4 space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">担当者</label>
+            <select value={editAssigneeId} onChange={e => setEditAssigneeId(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs">
+              {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">完了日（予定）</label>
+            <input type="date" value={editDate} onChange={e => setEditDate(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">業務内容</label>
+            <input type="text" value={editContent} onChange={e => setEditContent(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">詳細</label>
+            <textarea value={editDetail} onChange={e => setEditDetail(e.target.value)}
+              rows={3} className="w-full border rounded px-2 py-1 text-xs resize-y" />
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">優先度</label>
+            <select value={editPriority} onChange={e => setEditPriority(e.target.value as MemberTaskPriority)}
+              className="w-full border rounded px-2 py-1 text-xs">
+              <option value="high">🔴 高</option>
+              <option value="medium">🟡 中</option>
+              <option value="low">🟢 低</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">ステータス</label>
+            <select value={editStatus} onChange={e => setEditStatus(e.target.value as MemberTaskStatus)}
+              className="w-full border rounded px-2 py-1 text-xs">
+              <option value="pending">未着手</option>
+              <option value="in_progress">進行中</option>
+              <option value="completed">完了</option>
+            </select>
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">備考</label>
+            <input type="text" value={editNote} onChange={e => setEditNote(e.target.value)}
+              className="w-full border rounded px-2 py-1 text-xs" />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <button onClick={() => setIsEditing(false)} className="px-3 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded">キャンセル</button>
+          <button onClick={handleSave} className="px-4 py-1 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded">保存</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${
+      isCompleted ? 'border-gray-200 opacity-70' :
+      isOverdue ? 'border-red-300' :
+      task.priority === 'high' ? 'border-red-200' :
+      'border-purple-100'
+    }`}>
+      <div className="px-4 py-3 flex flex-col sm:flex-row justify-between items-start gap-2">
+        <div className="flex-1 space-y-1.5">
+          {/* Title row */}
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${PRIORITY_CLASS[task.priority]}`}>
+              {PRIORITY_LABEL[task.priority]}
+            </span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${STATUS_CLASS[task.status]}`}>
+              {STATUS_LABEL[task.status]}
+            </span>
+            {isOverdue && (
+              <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700">⚠️ 期限超過</span>
+            )}
+            <span className={`text-sm font-bold text-gray-800 ${isCompleted ? 'line-through text-gray-400' : ''}`}>
+              {task.taskContent}
+            </span>
+          </div>
+          {/* Meta row */}
+          <div className="flex flex-wrap gap-3 text-xs text-gray-600">
+            <span className="font-semibold text-purple-700">👤 {assignee?.name || '不明'}</span>
+            <span>📅 完了予定: <b className={isOverdue ? 'text-red-600' : ''}>{task.plannedCompletionDate}</b></span>
+            <span className="text-gray-400">登録: {creator?.name || '不明'} / {new Date(task.createdAt).toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' })}</span>
+            {task.completedAt && (
+              <span className="text-emerald-600">✅ 完了: {new Date(task.completedAt).toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' })}</span>
+            )}
+          </div>
+          {/* Detail */}
+          {task.detail && (
+            <p className="text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2">📝 {task.detail}</p>
+          )}
+          {/* Note */}
+          {task.note && (
+            <p className="text-xs text-gray-500">💡 {task.note}</p>
+          )}
+          {/* Quick status buttons */}
+          {!isCompleted && (
+            <div className="flex gap-2 mt-1">
+              {task.status !== 'in_progress' && (
+                <button onClick={() => handleStatusChange('in_progress')}
+                  className="text-[10px] px-2 py-0.5 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded border border-blue-200 transition-colors">
+                  → 進行中にする
+                </button>
+              )}
+              <button onClick={() => handleStatusChange('completed')}
+                className="text-[10px] px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded border border-emerald-200 transition-colors">
+                ✓ 完了にする
+              </button>
+            </div>
+          )}
+          {isCompleted && (
+            <button onClick={() => handleStatusChange('pending')}
+              className="text-[10px] px-2 py-0.5 bg-gray-50 hover:bg-gray-100 text-gray-500 rounded border border-gray-200 transition-colors">
+              ↩ 未着手に戻す
+            </button>
+          )}
+        </div>
+        {/* Edit/Delete (owner only) */}
+        {isOwn && (
           <div className="flex gap-2 flex-shrink-0">
             <button onClick={() => setIsEditing(true)} className="text-blue-400 hover:text-blue-600 text-xs">編集</button>
             <button onClick={handleDelete} className="text-red-400 hover:text-red-600 text-xs">削除</button>

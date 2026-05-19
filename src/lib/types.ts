@@ -108,6 +108,23 @@ export interface HandoverRequest {
   type?: 'handover' | 'important'; // 'handover' = 引き継ぎ, 'important' = 重要案件 (undefined treated as 'handover')
 }
 
+export type MemberTaskPriority = 'high' | 'medium' | 'low';
+export type MemberTaskStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface MemberTask {
+  id: string;
+  assigneeId: string;            // 担当者 (member id)
+  creatorId: string;             // 登録者 (member id)
+  taskContent: string;           // 業務内容
+  detail: string;                // 詳細・内容
+  plannedCompletionDate: string; // 完了日（予定）YYYY-MM-DD
+  priority: MemberTaskPriority;  // 優先度: high=高, medium=中, low=低
+  status: MemberTaskStatus;      // ステータス: pending=未着手, in_progress=進行中, completed=完了
+  createdAt: number;             // 登録日時 (timestamp)
+  completedAt?: number;          // 実際の完了日時
+  note?: string;                 // 備考
+}
+
 export interface MemberSummary {
   memberId: string;
   memberName: string;
