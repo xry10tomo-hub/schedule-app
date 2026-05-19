@@ -247,14 +247,8 @@ export default function HandoverPage() {
 
         {/* New Handover / New Important form (shared) */}
         {(tab === 'new-handover' || tab === 'new-important') && (
-          <div className={`bg-white rounded-xl shadow-sm border-2 ${formBorderColor} overflow-hidden`}>
-            {/* Colored header banner */}
-            <div className={`px-6 py-3 ${tab === 'new-handover' ? 'bg-gradient-to-r from-teal-600 to-teal-500' : 'bg-gradient-to-r from-red-600 to-red-500'}`}>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                {tab === 'new-handover' ? '✏️' : '🔴'} 新規{formLabel}を登録
-              </h3>
-            </div>
-            <div className="p-6 space-y-4">
+          <div className={`bg-white rounded-xl shadow-sm border ${formBorderColor} p-6 space-y-4`}>
+            <h3 className={`text-sm font-bold ${formTitleColor}`}>新規{formLabel}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">対象日 <span className="text-red-500">*</span></label>
@@ -340,7 +334,6 @@ export default function HandoverPage() {
                 className={`px-6 py-2 ${formBtnColor} text-white text-sm font-semibold rounded-lg disabled:opacity-50`}
               >共有する</button>
             </div>
-            </div>{/* end inner padding div */}
           </div>
         )}
 
@@ -403,11 +396,8 @@ export default function HandoverPage() {
 
             {/* New task form */}
             {showMemberTaskForm && (
-              <div className="bg-white rounded-xl shadow-sm border-2 border-purple-300 overflow-hidden">
-                <div className="bg-gradient-to-r from-purple-600 to-purple-500 px-5 py-3">
-                  <h3 className="text-sm font-bold text-white flex items-center gap-2">👥 新規タスク登録</h3>
-                </div>
-                <div className="p-5 space-y-4">
+              <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5 space-y-4">
+                <h3 className="text-sm font-bold text-purple-700">新規タスク登録</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">担当者 <span className="text-red-500">*</span></label>
@@ -466,7 +456,6 @@ export default function HandoverPage() {
                     className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
                   >登録する</button>
                 </div>
-                </div>{/* end inner padding div */}
               </div>
             )}
 
@@ -567,21 +556,18 @@ function HandoverDateGroup({
   isImportant?: boolean;
 }) {
   const [expanded, setExpanded] = useState(!isPast);
-
-  // 引き継ぎ = teal, 重要案件 = red
-  const accentBorder = isPast ? 'border-l-gray-300' : isImportant ? 'border-l-red-500' : 'border-l-teal-500';
   const headerBg = isImportant
-    ? (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-red-50 border-b border-red-200')
-    : (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-teal-50 border-b border-teal-200');
+    ? (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-red-50 border-b border-red-100')
+    : (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-blue-50 border-b border-blue-100');
   const headerText = isImportant
     ? (isPast ? 'text-gray-600' : 'text-red-700')
-    : (isPast ? 'text-gray-600' : 'text-teal-700');
+    : (isPast ? 'text-gray-600' : 'text-blue-700');
   const badgeClass = isImportant
     ? (isPast ? 'bg-gray-200 text-gray-600' : 'bg-red-100 text-red-700')
-    : (isPast ? 'bg-gray-200 text-gray-600' : 'bg-teal-100 text-teal-700');
+    : (isPast ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700');
 
   return (
-    <div className={`bg-white rounded-xl shadow-sm border-l-4 border border-gray-100 overflow-hidden ${accentBorder}`}>
+    <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${isPast ? 'border-gray-200' : 'border-gray-100'}`}>
       <button
         onClick={() => setExpanded(!expanded)}
         className={`w-full px-5 py-3 flex items-center justify-between hover:bg-opacity-80 transition-colors ${headerBg}`}
@@ -589,7 +575,7 @@ function HandoverDateGroup({
         <div className="flex items-center gap-3">
           <span className={`text-xs ${expanded ? '' : 'rotate-[-90deg]'} transition-transform`}>▼</span>
           <h3 className={`text-sm font-bold ${headerText}`}>
-            {isImportant ? '🔴' : '📋'} {formatDate(date)}（{date}）
+            {isImportant ? '🔴' : '📅'} {formatDate(date)}（{date}）
           </h3>
           <span className={`text-[10px] px-2 py-0.5 rounded-full ${badgeClass}`}>
             {dateItems.length}件
@@ -727,11 +713,7 @@ function HandoverItemRow({
   }
 
   return (
-    <div className={`px-5 py-4 border-l-4 ${
-      isCompleted ? 'bg-gray-50 opacity-60 border-l-gray-300' :
-      isImportant ? 'bg-red-50/30 border-l-red-500' :
-      'bg-teal-50/20 border-l-teal-500'
-    }`}>
+    <div className={`px-5 py-4 ${isCompleted ? 'bg-gray-50 opacity-60' : isOwn ? (isImportant ? 'bg-red-50/20' : 'bg-green-50/30') : ''}`}>
       <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
         <div className="flex-1 space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -745,9 +727,9 @@ function HandoverItemRow({
             {isCompleted ? (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-200 text-gray-600">完了</span>
             ) : isImportant ? (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white">🔴 重要案件</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">🔴 重要</span>
             ) : (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500 text-white">📋 引き継ぎ</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">共有済</span>
             )}
             <span className={`text-sm font-bold text-gray-800 ${isCompleted ? 'line-through' : ''}`}>{item.taskName}</span>
             <span className="text-xs text-gray-500">by {applicant?.name || item.applicantId}</span>
@@ -922,12 +904,11 @@ function MemberTaskRow({
   }
 
   return (
-    <div className={`bg-white rounded-xl shadow-sm border border-gray-100 border-l-4 overflow-hidden ${
-      isCompleted ? 'border-l-gray-300 opacity-70' :
-      isOverdue ? 'border-l-red-500 bg-red-50/10' :
-      task.priority === 'high' ? 'border-l-purple-600 bg-purple-50/20' :
-      task.priority === 'medium' ? 'border-l-purple-400 bg-purple-50/10' :
-      'border-l-purple-300'
+    <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${
+      isCompleted ? 'border-gray-200 opacity-70' :
+      isOverdue ? 'border-red-300' :
+      task.priority === 'high' ? 'border-red-200' :
+      'border-purple-100'
     }`}>
       <div className="px-4 py-3 flex flex-col sm:flex-row justify-between items-start gap-2">
         <div className="flex-1 space-y-1.5">
