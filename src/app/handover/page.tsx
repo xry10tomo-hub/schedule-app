@@ -19,7 +19,8 @@ import {
 } from '@/lib/store';
 import type { HandoverRequest, TaskDefinition, MonthlySchedule, MemberTask, MemberTaskPriority, MemberTaskStatus } from '@/lib/types';
 
-type TabKey = 'new-handover' | 'handover-list' | 'new-important' | 'important-list' | 'member-tasks';
+type TabKey = 'new-share' | 'handover-list' | 'important-list' | 'member-tasks';
+type NewShareSubTab = 'handover' | 'important';
 
 export default function HandoverPage() {
   const { currentUserId, members, dataVersion } = useAppContext();
@@ -29,6 +30,7 @@ export default function HandoverPage() {
   const [memberTaskItems, setMemberTaskItems] = useState<MemberTask[]>([]);
   const [taskDefs, setTaskDefs] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [tab, setTab] = useState<TabKey>('handover-list');
+  const [newShareSubTab, setNewShareSubTab] = useState<NewShareSubTab>('handover');
 
   // Shared form state (used by both 新規引き継ぎ and 新規重要案件)
   const [formTask, setFormTask] = useState('');
@@ -146,6 +148,7 @@ export default function HandoverPage() {
     applyToMonthly(newItem);
     resetForm();
     setTab(type === 'handover' ? 'handover-list' : 'important-list');
+    setNewShareSubTab('handover');
   }
 
   function formatDate(dateStr: string) {
@@ -200,11 +203,11 @@ export default function HandoverPage() {
     return list;
   }, [memberTaskItems, mtFilterAssignee, mtFilterStatus]);
 
-  // Shared form JSX (reused for both 引き継ぎ and 重要案件 tabs)
-  const formLabel = tab === 'new-important' ? '重要案件' : '引き継ぎ';
-  const formBorderColor = tab === 'new-important' ? 'border-red-200' : 'border-green-200';
-  const formTitleColor = tab === 'new-important' ? 'text-red-700' : 'text-green-700';
-  const formBtnColor = tab === 'new-important' ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700';
+  // Form colors driven by sub-tab selection
+  const formLabel = newShareSubTab === 'important' ? '重要案件' : '引き継ぎ';
+  const formBorderColor = newShareSubTab === 'important' ? 'border-red-200' : 'border-green-200';
+  const formTitleColor = newShareSubTab === 'important' ? 'text-red-700' : 'text-green-700';
+  const formBtnColor = newShareSubTab === 'important' ? 'bg-red-600 hover:bg-red-700' : 'bg-green-600 hover:bg-green-700';
 
   return (
     <DashboardLayout>
@@ -219,11 +222,10 @@ export default function HandoverPage() {
         {/* Tab switcher */}
         <div className="flex flex-wrap gap-2 p-1 bg-gray-100 rounded-xl">
           {([
-            { key: 'new-handover',  label: '新規引き継ぎ',    icon: '✏️', activeClass: 'bg-teal-600 text-white shadow-md', hoverClass: 'hover:bg-teal-50 hover:text-teal-700', count: null },
-            { key: 'handover-list', label: '引き継ぎ一覧',    icon: '📋', activeClass: 'bg-teal-600 text-white shadow-md', hoverClass: 'hover:bg-teal-50 hover:text-teal-700', count: handoverItems.length },
-            { key: 'new-important', label: '新規重要案件',    icon: '🔴', activeClass: 'bg-red-600 text-white shadow-md',  hoverClass: 'hover:bg-red-50 hover:text-red-700',   count: null },
-            { key: 'important-list',label: '重要案件一覧',    icon: '📌', activeClass: 'bg-red-600 text-white shadow-md',  hoverClass: 'hover:bg-red-50 hover:text-red-700',   count: importantItems.length },
-            { key: 'member-tasks',  label: 'メンバー別タスク', icon: '👥', activeClass: 'bg-purple-600 text-white shadow-md', hoverClass: 'hover:bg-purple-50 hover:text-purple-700', count: filteredMemberTasks.length },
+            { key: 'new-share',     label: '新規共有',        icon: '✏️', activeClass: 'bg-teal-600 text-white shadow-md',   hoverClass: 'hover:bg-teal-50 hover:text-teal-700',   count: null },
+            { key: 'handover-list', label: '引き継ぎ一覧',    icon: '📋', activeClass: 'bg-teal-600 text-white shadow-md',   hoverClass: 'hover:bg-teal-50 hover:text-teal-700',   count: handoverItems.length },
+            { key: 'important-list',label: '重要案件一覧',    icon: '📌', activeClass: 'bg-red-600 text-white shadow-md',    hoverClass: 'hover:bg-red-50 hover:text-red-700',     count: importantItems.length },
+            { key: 'member-tasks',  label: 'メンバー別タスク', icon: '👥', activeClass: 'bg-purple-600 text-white shadow-md', hoverClass: 'hover:bg-purple-50 hover:text-purple-700', count: memberTaskItems.length },
           ] as { key: TabKey; label: string; icon: string; activeClass: string; hoverClass: string; count: number | null }[]).map(({ key, label, icon, activeClass, hoverClass, count }) => (
             <button
               key={key}
@@ -245,9 +247,29 @@ export default function HandoverPage() {
           ))}
         </div>
 
-        {/* New Handover / New Important form (shared) */}
-        {(tab === 'new-handover' || tab === 'new-important') && (
-          <div className={`bg-white rounded-xl shadow-sm border ${formBorderColor} p-6 space-y-4`}>
+        {/* 新規共有フォーム（引き継ぎ / 重要タスク サブタブ） */}
+        {tab === 'new-share' && (
+          <div className={`bg-white rounded-xl shadow-sm border ${formBorderColor} overflow-hidden`}>
+            {/* Sub-tab switcher */}
+            <div className="flex border-b border-gray-200 bg-gray-50">
+              <button
+                onClick={() => setNewShareSubTab('handover')}
+                className={`px-6 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
+                  newShareSubTab === 'handover'
+                    ? 'border-teal-600 text-teal-700 bg-white'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >✏️ 引き継ぎ</button>
+              <button
+                onClick={() => setNewShareSubTab('important')}
+                className={`px-6 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
+                  newShareSubTab === 'important'
+                    ? 'border-red-600 text-red-700 bg-white'
+                    : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+              >🔴 重要タスク</button>
+            </div>
+            <div className="p-6 space-y-4">
             <h3 className={`text-sm font-bold ${formTitleColor}`}>新規{formLabel}</h3>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
@@ -306,13 +328,13 @@ export default function HandoverPage() {
               </div>
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-gray-600 mb-1">
-                  {tab === 'new-important' ? '案件概要・理由' : '引き継ぎ理由'}
+                  {newShareSubTab === 'important' ? '案件概要・理由' : '引き継ぎ理由'}
                 </label>
                 <input
                   type="text"
                   value={formReason}
                   onChange={e => setFormReason(e.target.value)}
-                  placeholder={tab === 'new-important' ? '例: 重要顧客・期限あり' : '例: 当日完了できず翌日に持ち越し'}
+                  placeholder={newShareSubTab === 'important' ? '例: 重要顧客・期限あり' : '例: 当日完了できず翌日に持ち越し'}
                   className="w-full border rounded-lg px-3 py-2 text-sm"
                 />
               </div>
@@ -329,11 +351,12 @@ export default function HandoverPage() {
             </div>
             <div className="flex justify-end">
               <button
-                onClick={() => handleSubmit(tab === 'new-important' ? 'important' : 'handover')}
+                onClick={() => handleSubmit(newShareSubTab)}
                 disabled={!formTask || !formDate}
                 className={`px-6 py-2 ${formBtnColor} text-white text-sm font-semibold rounded-lg disabled:opacity-50`}
               >共有する</button>
             </div>
+            </div>{/* end inner p-6 */}
           </div>
         )}
 
