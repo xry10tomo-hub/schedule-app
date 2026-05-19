@@ -217,48 +217,44 @@ export default function HandoverPage() {
         </div>
 
         {/* Tab switcher */}
-        <div className="flex flex-wrap border-b border-gray-200 gap-0">
+        <div className="flex flex-wrap gap-2 p-1 bg-gray-100 rounded-xl">
           {([
-            { key: 'new-handover', label: '新規引き継ぎ', color: 'green', count: null },
-            { key: 'handover-list', label: '引き継ぎ一覧', color: 'blue', count: handoverItems.length },
-            { key: 'new-important', label: '新規重要案件', color: 'red', count: null },
-            { key: 'important-list', label: '重要案件一覧', color: 'orange', count: importantItems.length },
-            { key: 'member-tasks', label: 'メンバー別タスク', color: 'purple', count: null },
-          ] as { key: TabKey; label: string; color: string; count: number | null }[]).map(({ key, label, color, count }) => {
-            const activeColors: Record<string, string> = {
-              green: 'border-green-600 text-green-700',
-              blue: 'border-blue-600 text-blue-700',
-              red: 'border-red-600 text-red-700',
-              orange: 'border-orange-500 text-orange-700',
-              purple: 'border-purple-600 text-purple-700',
-            };
-            const badgeColors: Record<string, string> = {
-              blue: 'bg-blue-100 text-blue-700',
-              orange: 'bg-orange-100 text-orange-700',
-            };
-            return (
-              <button
-                key={key}
-                onClick={() => setTab(key)}
-                className={`px-4 py-2 text-sm font-semibold border-b-2 transition-colors whitespace-nowrap ${
-                  tab === key ? activeColors[color] : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                {label}
-                {count !== null && count > 0 && (
-                  <span className={`ml-1 text-[10px] rounded-full px-1.5 py-0.5 ${badgeColors[color] || 'bg-gray-100 text-gray-600'}`}>
-                    {count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+            { key: 'new-handover',  label: '新規引き継ぎ',    icon: '✏️', activeClass: 'bg-teal-600 text-white shadow-md', hoverClass: 'hover:bg-teal-50 hover:text-teal-700', count: null },
+            { key: 'handover-list', label: '引き継ぎ一覧',    icon: '📋', activeClass: 'bg-teal-600 text-white shadow-md', hoverClass: 'hover:bg-teal-50 hover:text-teal-700', count: handoverItems.length },
+            { key: 'new-important', label: '新規重要案件',    icon: '🔴', activeClass: 'bg-red-600 text-white shadow-md',  hoverClass: 'hover:bg-red-50 hover:text-red-700',   count: null },
+            { key: 'important-list',label: '重要案件一覧',    icon: '📌', activeClass: 'bg-red-600 text-white shadow-md',  hoverClass: 'hover:bg-red-50 hover:text-red-700',   count: importantItems.length },
+            { key: 'member-tasks',  label: 'メンバー別タスク', icon: '👥', activeClass: 'bg-purple-600 text-white shadow-md', hoverClass: 'hover:bg-purple-50 hover:text-purple-700', count: filteredMemberTasks.length },
+          ] as { key: TabKey; label: string; icon: string; activeClass: string; hoverClass: string; count: number | null }[]).map(({ key, label, icon, activeClass, hoverClass, count }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key)}
+              className={`flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all whitespace-nowrap ${
+                tab === key ? activeClass : `text-gray-500 ${hoverClass}`
+              }`}
+            >
+              <span>{icon}</span>
+              <span>{label}</span>
+              {count !== null && count > 0 && (
+                <span className={`text-[10px] rounded-full px-1.5 py-0.5 ${
+                  tab === key ? 'bg-white/30 text-white' : 'bg-gray-200 text-gray-600'
+                }`}>
+                  {count}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
 
         {/* New Handover / New Important form (shared) */}
         {(tab === 'new-handover' || tab === 'new-important') && (
-          <div className={`bg-white rounded-xl shadow-sm border ${formBorderColor} p-6 space-y-4`}>
-            <h3 className={`text-sm font-bold ${formTitleColor}`}>新規{formLabel}</h3>
+          <div className={`bg-white rounded-xl shadow-sm border-2 ${formBorderColor} overflow-hidden`}>
+            {/* Colored header banner */}
+            <div className={`px-6 py-3 ${tab === 'new-handover' ? 'bg-gradient-to-r from-teal-600 to-teal-500' : 'bg-gradient-to-r from-red-600 to-red-500'}`}>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                {tab === 'new-handover' ? '✏️' : '🔴'} 新規{formLabel}を登録
+              </h3>
+            </div>
+            <div className="p-6 space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">対象日 <span className="text-red-500">*</span></label>
@@ -344,6 +340,7 @@ export default function HandoverPage() {
                 className={`px-6 py-2 ${formBtnColor} text-white text-sm font-semibold rounded-lg disabled:opacity-50`}
               >共有する</button>
             </div>
+            </div>{/* end inner padding div */}
           </div>
         )}
 
@@ -406,8 +403,11 @@ export default function HandoverPage() {
 
             {/* New task form */}
             {showMemberTaskForm && (
-              <div className="bg-white rounded-xl shadow-sm border border-purple-200 p-5 space-y-4">
-                <h3 className="text-sm font-bold text-purple-700">新規タスク登録</h3>
+              <div className="bg-white rounded-xl shadow-sm border-2 border-purple-300 overflow-hidden">
+                <div className="bg-gradient-to-r from-purple-600 to-purple-500 px-5 py-3">
+                  <h3 className="text-sm font-bold text-white flex items-center gap-2">👥 新規タスク登録</h3>
+                </div>
+                <div className="p-5 space-y-4">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">担当者 <span className="text-red-500">*</span></label>
@@ -466,6 +466,7 @@ export default function HandoverPage() {
                     className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
                   >登録する</button>
                 </div>
+                </div>{/* end inner padding div */}
               </div>
             )}
 
@@ -566,18 +567,21 @@ function HandoverDateGroup({
   isImportant?: boolean;
 }) {
   const [expanded, setExpanded] = useState(!isPast);
+
+  // 引き継ぎ = teal, 重要案件 = red
+  const accentBorder = isPast ? 'border-l-gray-300' : isImportant ? 'border-l-red-500' : 'border-l-teal-500';
   const headerBg = isImportant
-    ? (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-red-50 border-b border-red-100')
-    : (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-blue-50 border-b border-blue-100');
+    ? (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-red-50 border-b border-red-200')
+    : (isPast ? 'bg-gray-100 border-b border-gray-200' : 'bg-teal-50 border-b border-teal-200');
   const headerText = isImportant
     ? (isPast ? 'text-gray-600' : 'text-red-700')
-    : (isPast ? 'text-gray-600' : 'text-blue-700');
+    : (isPast ? 'text-gray-600' : 'text-teal-700');
   const badgeClass = isImportant
     ? (isPast ? 'bg-gray-200 text-gray-600' : 'bg-red-100 text-red-700')
-    : (isPast ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700');
+    : (isPast ? 'bg-gray-200 text-gray-600' : 'bg-teal-100 text-teal-700');
 
   return (
-    <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${isPast ? 'border-gray-200' : 'border-gray-100'}`}>
+    <div className={`bg-white rounded-xl shadow-sm border-l-4 border border-gray-100 overflow-hidden ${accentBorder}`}>
       <button
         onClick={() => setExpanded(!expanded)}
         className={`w-full px-5 py-3 flex items-center justify-between hover:bg-opacity-80 transition-colors ${headerBg}`}
@@ -585,7 +589,7 @@ function HandoverDateGroup({
         <div className="flex items-center gap-3">
           <span className={`text-xs ${expanded ? '' : 'rotate-[-90deg]'} transition-transform`}>▼</span>
           <h3 className={`text-sm font-bold ${headerText}`}>
-            {isImportant ? '🔴' : '📅'} {formatDate(date)}（{date}）
+            {isImportant ? '🔴' : '📋'} {formatDate(date)}（{date}）
           </h3>
           <span className={`text-[10px] px-2 py-0.5 rounded-full ${badgeClass}`}>
             {dateItems.length}件
@@ -723,7 +727,11 @@ function HandoverItemRow({
   }
 
   return (
-    <div className={`px-5 py-4 ${isCompleted ? 'bg-gray-50 opacity-60' : isOwn ? (isImportant ? 'bg-red-50/20' : 'bg-green-50/30') : ''}`}>
+    <div className={`px-5 py-4 border-l-4 ${
+      isCompleted ? 'bg-gray-50 opacity-60 border-l-gray-300' :
+      isImportant ? 'bg-red-50/30 border-l-red-500' :
+      'bg-teal-50/20 border-l-teal-500'
+    }`}>
       <div className="flex flex-col sm:flex-row justify-between items-start gap-2">
         <div className="flex-1 space-y-1">
           <div className="flex items-center gap-2 flex-wrap">
@@ -737,9 +745,9 @@ function HandoverItemRow({
             {isCompleted ? (
               <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-gray-200 text-gray-600">完了</span>
             ) : isImportant ? (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-700">🔴 重要</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white">🔴 重要案件</span>
             ) : (
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-green-100 text-green-700">共有済</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-500 text-white">📋 引き継ぎ</span>
             )}
             <span className={`text-sm font-bold text-gray-800 ${isCompleted ? 'line-through' : ''}`}>{item.taskName}</span>
             <span className="text-xs text-gray-500">by {applicant?.name || item.applicantId}</span>
@@ -914,11 +922,12 @@ function MemberTaskRow({
   }
 
   return (
-    <div className={`bg-white rounded-xl shadow-sm border overflow-hidden ${
-      isCompleted ? 'border-gray-200 opacity-70' :
-      isOverdue ? 'border-red-300' :
-      task.priority === 'high' ? 'border-red-200' :
-      'border-purple-100'
+    <div className={`bg-white rounded-xl shadow-sm border border-gray-100 border-l-4 overflow-hidden ${
+      isCompleted ? 'border-l-gray-300 opacity-70' :
+      isOverdue ? 'border-l-red-500 bg-red-50/10' :
+      task.priority === 'high' ? 'border-l-purple-600 bg-purple-50/20' :
+      task.priority === 'medium' ? 'border-l-purple-400 bg-purple-50/10' :
+      'border-l-purple-300'
     }`}>
       <div className="px-4 py-3 flex flex-col sm:flex-row justify-between items-start gap-2">
         <div className="flex-1 space-y-1.5">
