@@ -140,7 +140,8 @@ export default function AdminPage() {
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
         let minutes = 0, count = 0, points = 0;
-        // Sum minutes from actual timeline
+
+        // ① 実績タイムラインブロック（15分/ブロック）
         const dateActualTl = monthData.allActualTl[dateStr] || {};
         Object.entries(dateActualTl).forEach(([memberId, blocks]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
@@ -148,7 +149,17 @@ export default function AdminPage() {
             if (blockTaskName === tn) minutes += 15;
           });
         });
-        // Sum count/points from performance
+
+        // ② 実績タイムラインがなければ DailyTask.plannedMinutes を使用
+        if (minutes === 0) {
+          allTasks.forEach(t => {
+            if (t.taskName !== tn || t.date !== dateStr) return;
+            if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
+            minutes += t.plannedMinutes || 0;
+          });
+        }
+
+        // ③ ホーム画面の実績入力（件数・点数）
         const datePerf = monthData.allPerf[dateStr] || {};
         Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
@@ -158,6 +169,16 @@ export default function AdminPage() {
             points += entry.points || 0;
           }
         });
+
+        // ④ 実績入力がなければ DailyTask.plannedCount を使用
+        if (count === 0) {
+          allTasks.forEach(t => {
+            if (t.taskName !== tn || t.date !== dateStr) return;
+            if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
+            count += t.plannedCount || 0;
+          });
+        }
+
         data[tn][d] = { minutes, count, points };
       }
     }
