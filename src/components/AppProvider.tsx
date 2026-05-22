@@ -4,6 +4,22 @@ import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady, performUndo, runTaskMigration } from '@/lib/store';
 
+// Deep-merge two nested objects. LOCAL wins at every leaf (local data is assumed to be newer).
+// Used for actualPerformance and actualTimeline so that home screen entries are never overwritten by stale Firestore data.
+function mergeNestedObjects(localData: unknown, remoteData: unknown): unknown {
+  if (typeof localData !== 'object' || localData === null || Array.isArray(localData)) return localData;
+  if (typeof remoteData !== 'object' || remoteData === null || Array.isArray(remoteData)) return localData;
+  const result = { ...(remoteData as Record<string, unknown>) };
+  for (const [key, val] of Object.entries(localData as Record<string, unknown>)) {
+    if (key in result && typeof val === 'object' && val !== null && !Array.isArray(val)) {
+      result[key] = mergeNestedObjects(val, result[key]);
+    } else {
+      result[key] = val; // local wins
+    }
+  }
+  return result;
+}
+
 // Merge two arrays of records by `id`. Returns null if either side is not an array of objects with id.
 // On collision (same id in both), prefers the LOCAL record (assumed to be a more recent edit).
 // This recovers local-only records that haven't been synced yet, while preserving Firestore's complete dataset.
@@ -82,6 +98,12 @@ export default function AppProvider({ children }: { children: React.ReactNode })
                 }
                 localStorage.setItem(key, JSON.stringify(merged));
                 if (key === STORAGE_KEYS.members) setMembersState(merged as Member[]);
+              } else if (key === STORAGE_KEYS.actualPerformance || key === STORAGE_KEYS.actualTimeline) {
+                // Nested-object stores: deep-merge so locally-entered data isn't overwritten
+                const deepMerged = mergeNestedObjects(localData, remoteData);
+                localStorage.setItem(key, JSON.stringify(deepMerged));
+                // Push merged data back to Firestore so remote stays up to date
+                await setDoc(doc(db, 'appData', key), { value: deepMerged, updatedAt: Date.now() });
               } else {
                 // Not mergeable (object, not array) → use Firestore as source of truth
                 localStorage.setItem(key, JSON.stringify(remoteData));
@@ -156,10 +178,19 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       onSnapshot(doc(db, 'appData', key), (snap) => {
         // Only apply remote changes (skip our own writes)
         if (snap.exists() && !snap.metadata.hasPendingWrites) {
-          const data = snap.data().value;
-          localStorage.setItem(key, JSON.stringify(data));
-          if (key === STORAGE_KEYS.members) {
-            setMembersState(data as Member[]);
+          const remoteData = snap.data().value;
+          if (key === STORAGE_KEYS.actualPerformance || key === STORAGE_KEYS.actualTimeline) {
+            // Deep-merge so that locally-entered data isn't overwritten by a remote snapshot
+            const localRaw = localStorage.getItem(key);
+            let localData: unknown = null;
+            try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
+            const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
+            localStorage.setItem(key, JSON.stringify(merged));
+          } else {
+            localStorage.setItem(key, JSON.stringify(remoteData));
+            if (key === STORAGE_KEYS.members) {
+              setMembersState(remoteData as Member[]);
+            }
           }
           setDataVersion(v => v + 1);
         }
@@ -192,6 +223,12 @@ export default function AppProvider({ children }: { children: React.ReactNode })
             }
             localStorage.setItem(key, JSON.stringify(merged));
             if (key === STORAGE_KEYS.members) setMembersState(merged as Member[]);
+          } else if (key === STORAGE_KEYS.actualPerformance || key === STORAGE_KEYS.actualTimeline) {
+            // Nested-object stores: deep-merge so locally-entered data isn't overwritten by 15s refresh
+            const deepMerged = mergeNestedObjects(localData, remoteData);
+            localStorage.setItem(key, JSON.stringify(deepMerged));
+            // Push merged data back to Firestore so remote stays up to date
+            await setDoc(doc(db, 'appData', key), { value: deepMerged, updatedAt: Date.now() });
           } else {
             // Not array-of-id (e.g., timeline/perf objects keyed by date) → use Firestore as truth
             localStorage.setItem(key, JSON.stringify(remoteData));
