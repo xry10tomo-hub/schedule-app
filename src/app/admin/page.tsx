@@ -150,6 +150,15 @@ export default function AdminPage() {
           });
         });
 
+        // ② タイムライン未記録の場合: DailyTask.actualMinutes（日次入力画面の実績）を使用
+        if (minutes === 0) {
+          allTasks.forEach(t => {
+            if (t.taskName !== tn || t.date !== dateStr) return;
+            if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
+            minutes += t.actualMinutes || 0;
+          });
+        }
+
         // ③ ホーム画面の実績入力（件数・点数）
         const datePerf = monthData.allPerf[dateStr] || {};
         Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
@@ -160,6 +169,16 @@ export default function AdminPage() {
             points += entry.points || 0;
           }
         });
+
+        // ④ ホーム画面未入力の場合: DailyTask.actualCount / actualPoints（日次入力画面の実績）を使用
+        if (count === 0 && points === 0) {
+          allTasks.forEach(t => {
+            if (t.taskName !== tn || t.date !== dateStr) return;
+            if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
+            count += t.actualCount || 0;
+            points += t.actualPoints || 0;
+          });
+        }
 
         data[tn][d] = { minutes, count, points };
       }
