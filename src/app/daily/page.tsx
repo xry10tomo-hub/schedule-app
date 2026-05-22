@@ -189,7 +189,10 @@ export default function DailyPage() {
         const idx = PRIORITY_TASK_ORDER.indexOf(t.taskName);
         return idx >= 0 ? idx : 999;
       };
-      return order(a) - order(b);
+      const o = order(a) - order(b);
+      if (o !== 0) return o;
+      // Rule 3: 決定的なタイブレーク → id 昇順（同じ入力に対し常に同じ並びを保証）
+      return a.id.localeCompare(b.id);
     });
   }
 
@@ -395,13 +398,14 @@ export default function DailyPage() {
       return updated;
     });
     setDailyTasks(all);
-    setTasksState(all.filter(t => t.date === selectedDate));
+    // 並び替えを適用 → Firestore 同期完了で loadTasks が再走しても並びが変わらず、行ジャンプを防ぐ
+    setTasksState(sortTasks(all.filter(t => t.date === selectedDate)));
   }
 
   function handleDeleteTask(id: string) {
     const all = getDailyTasks().filter(t => t.id !== id);
     setDailyTasks(all);
-    setTasksState(all.filter(t => t.date === selectedDate));
+    setTasksState(sortTasks(all.filter(t => t.date === selectedDate)));
   }
 
   // Get task assignment config (with defaults)
