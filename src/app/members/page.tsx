@@ -28,8 +28,11 @@ export default function MembersPage() {
     return slots;
   })();
 
-  const [matrixCategory, setMatrixCategory] = useState<string>(TASK_CATEGORIES[0]);
-  const [matrixView, setMatrixView] = useState<'speed' | 'priority'>('speed');
+  const [matrixCategory, setMatrixCategory] = useState<string>('ALL');
+  const [matrixView, setMatrixView] = useState<'speed' | 'priority'>('priority');
+  // Inline-edit state for matrix cells: "${memberId}|${taskName}" key
+  const [matrixEditing, setMatrixEditing] = useState<string | null>(null);
+  const [matrixEditValue, setMatrixEditValue] = useState<string>('');
 
   useEffect(() => {
     setMembersList(getMembers());
@@ -372,7 +375,49 @@ export default function MembersPage() {
     );
   }
 
-  const matrixTasks = tasksByCategory[matrixCategory] || [];
+  // Resolve matrix columns: "ALL" shows every task, otherwise filter by category
+  const matrixTasks = matrixCategory === 'ALL'
+    ? taskDefs
+    : (tasksByCategory[matrixCategory] || []);
+
+  // Save inline cell edit (speed or priority)
+  function saveMatrixCell(memberId: string, taskName: string, view: 'speed' | 'priority', raw: string) {
+    const trimmed = raw.trim();
+    const num = trimmed === '' ? null : Number(trimmed);
+    const updated = getMembers().map(m => {
+      if (m.id !== memberId) return m;
+      const skills = m.skills.includes(taskName) ? m.skills : [...m.skills, taskName];
+      const speedRatings = { ...(m.speedRatings || {}) };
+      const priorityRatings = { ...(m.priorityRatings || {}) };
+      if (view === 'speed') {
+        if (num == null || isNaN(num)) delete speedRatings[taskName];
+        else speedRatings[taskName] = parseFloat(num.toFixed(1));
+      } else {
+        if (num == null || isNaN(num)) delete priorityRatings[taskName];
+        else priorityRatings[taskName] = Math.max(1, Math.round(num));
+      }
+      return { ...m, skills, speedRatings, priorityRatings };
+    });
+    setMembers(updated);
+    setMembersList(updated);
+    refreshMembers();
+    setMatrixEditing(null);
+    setMatrixEditValue('');
+  }
+
+  function clearMatrixCell(memberId: string, taskName: string) {
+    const updated = getMembers().map(m => {
+      if (m.id !== memberId) return m;
+      const skills = m.skills.filter(s => s !== taskName);
+      const speedRatings = { ...(m.speedRatings || {}) }; delete speedRatings[taskName];
+      const priorityRatings = { ...(m.priorityRatings || {}) }; delete priorityRatings[taskName];
+      const scheduledTimeRatings = { ...(m.scheduledTimeRatings || {}) }; delete scheduledTimeRatings[taskName];
+      return { ...m, skills, speedRatings, priorityRatings, scheduledTimeRatings };
+    });
+    setMembers(updated);
+    setMembersList(updated);
+    refreshMembers();
+  }
 
   return (
     <DashboardLayout>
@@ -380,8 +425,130 @@ export default function MembersPage() {
         <h1 className="text-2xl font-bold text-gray-800">業務及びメンバー管理</h1>
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg px-4 py-3 text-sm text-yellow-800">
-          <strong>設定方法：</strong>各メンバーの「編集」→ 業務を選択後、<strong>時間（分）</strong>・<strong>優先順位</strong>・<strong>実施時間</strong>を入力してください。
-          優先順位は <strong>1が最優先</strong>（数字が小さいほど優先的に割り振られます）。実施時間を設定すると、自動割振時にその時間に固定配置されます。
+          <strong>設定方法：</strong>下の <strong>スキル・優先順位マトリックス</strong> でセルを直接クリックして数値を入力（時間・優先順位）。
+          または、各メンバーの「編集」→ 業務を選択後、<strong>時間（分）</strong>・<strong>優先順位</strong>・<strong>実施時間</strong>を入力。
+          優先順位は <strong>1が最優先</strong>（数字が小さいほど優先的に自動割振されます）。
+        </div>
+
+        {/* ===== Skill / Priority Matrix (moved to TOP for visibility + inline edit) ===== */}
+        <div id="skill-matrix" className="bg-white rounded-xl shadow-sm border-2 border-purple-200 p-6">
+          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-3">
+            <div>
+              <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                <span className="text-purple-600">⚡</span>
+                スキル・優先順位マトリックス
+              </h3>
+              <p className="text-xs text-gray-500 mt-1">
+                セルをクリックして直接入力 → 自動割振のマスターデータになります（P1=最優先・空欄=対応不可）
+              </p>
+            </div>
+            <div className="flex items-center gap-3">
+              <div className="flex bg-gray-100 rounded-lg p-0.5">
+                <button
+                  onClick={() => setMatrixView('priority')}
+                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${matrixView === 'priority' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500'}`}
+                >優先順位</button>
+                <button
+                  onClick={() => setMatrixView('speed')}
+                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${matrixView === 'speed' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-500'}`}
+                >時間(分)</button>
+              </div>
+              <select value={matrixCategory} onChange={e => setMatrixCategory(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
+                <option value="ALL">全カテゴリ ({taskDefs.length}業務)</option>
+                {TASK_CATEGORIES.map(cat => {
+                  const n = (tasksByCategory[cat] || []).length;
+                  return <option key={cat} value={cat}>{cat} ({n})</option>;
+                })}
+              </select>
+            </div>
+          </div>
+          <div className="overflow-x-auto max-h-[60vh] overflow-y-auto">
+            <table className="w-full text-xs border-collapse">
+              <thead className="sticky top-0 bg-white z-20">
+                <tr className="text-left text-gray-500 border-b">
+                  <th className="pb-2 pr-3 pl-2 font-medium sticky left-0 bg-white z-10 min-w-[80px]">メンバー</th>
+                  {matrixTasks.map(td => (
+                    <th key={td.id} className="pb-2 px-1 text-center font-medium text-[10px] whitespace-nowrap min-w-[50px]" title={td.name}>
+                      <span className="block text-gray-400 text-[8px]">{td.category}</span>
+                      {td.name.replace(/^【[^】]+】/, '')}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {membersList.map(m => (
+                  <tr key={m.id} className="border-b border-gray-50 hover:bg-purple-50/30">
+                    <td className="py-1 pr-3 pl-2 font-medium text-gray-800 sticky left-0 bg-white z-10">
+                      <span className={`inline-block w-2 h-2 rounded-full mr-1 ${m.role === 'employee' ? 'bg-green-500' : 'bg-blue-500'}`} />
+                      {m.name}
+                    </td>
+                    {matrixTasks.map(td => {
+                      const cellKey = `${m.id}|${td.name}`;
+                      const isEditing = matrixEditing === cellKey;
+                      const hasSkill = m.skills.includes(td.name);
+                      const speed = m.speedRatings?.[td.name];
+                      const priority = (m.priorityRatings || {})[td.name];
+                      const value = matrixView === 'speed' ? speed : priority;
+                      const colorClass = matrixView === 'speed'
+                        ? (value != null ? 'bg-green-100 text-green-700' : 'bg-gray-50 text-gray-400')
+                        : priority === 1 ? 'bg-purple-300 text-purple-900 font-bold' :
+                          priority === 2 ? 'bg-purple-200 text-purple-800' :
+                          priority === 3 ? 'bg-purple-100 text-purple-700' :
+                          priority != null ? 'bg-purple-50 text-purple-600' :
+                          hasSkill ? 'bg-gray-100 text-gray-500' : 'bg-gray-50 text-gray-300';
+                      return (
+                        <td key={td.id} className="py-1 px-1 text-center">
+                          {isEditing ? (
+                            <input
+                              type="number"
+                              autoFocus
+                              value={matrixEditValue}
+                              onChange={e => setMatrixEditValue(e.target.value)}
+                              onBlur={() => saveMatrixCell(m.id, td.name, matrixView, matrixEditValue)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') { (e.target as HTMLInputElement).blur(); }
+                                if (e.key === 'Escape') { setMatrixEditing(null); setMatrixEditValue(''); }
+                              }}
+                              className="w-12 border-2 border-purple-400 rounded px-1 py-0.5 text-xs text-center"
+                              step={matrixView === 'speed' ? '0.1' : '1'}
+                              min={matrixView === 'priority' ? 1 : 0}
+                              placeholder="-"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => { setMatrixEditing(cellKey); setMatrixEditValue(value != null ? String(value) : ''); }}
+                              onContextMenu={e => { e.preventDefault(); if (hasSkill && confirm(`${m.name} × ${td.name} を「対応不可」に戻しますか？`)) clearMatrixCell(m.id, td.name); }}
+                              className={`inline-block w-9 h-7 leading-7 rounded text-xs font-semibold hover:ring-2 hover:ring-purple-300 transition-all ${colorClass}`}
+                              title={`クリックで編集 / 右クリックで対応不可に戻す  (${m.name} × ${td.name})`}
+                            >
+                              {value != null ? value : (hasSkill ? '○' : '')}
+                            </button>
+                          )}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-3 text-[11px] text-gray-500">
+            {matrixView === 'priority' ? (
+              <>
+                <span><span className="inline-block w-3 h-3 rounded bg-purple-300 mr-1 align-middle" />P1=最優先</span>
+                <span><span className="inline-block w-3 h-3 rounded bg-purple-200 mr-1 align-middle" />P2</span>
+                <span><span className="inline-block w-3 h-3 rounded bg-purple-100 mr-1 align-middle" />P3</span>
+                <span><span className="inline-block w-3 h-3 rounded bg-gray-100 mr-1 align-middle" />○=対応可・優先度未設定</span>
+                <span><span className="inline-block w-3 h-3 rounded bg-gray-50 border mr-1 align-middle" />空欄=対応不可</span>
+                <span className="ml-auto text-gray-400">セルをクリック→数値入力 / 右クリック→対応不可に戻す</span>
+              </>
+            ) : (
+              <>
+                <span><span className="inline-block w-3 h-3 rounded bg-green-100 mr-1 align-middle" />1件あたり分（小数点1桁）</span>
+                <span className="ml-auto text-gray-400">セルをクリック→数値入力</span>
+              </>
+            )}
+          </div>
         </div>
 
         {/* Employees */}
@@ -401,80 +568,6 @@ export default function MembersPage() {
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {parttimers.map(m => <MemberCard key={m.id} member={m} />)}
-          </div>
-        </div>
-
-        {/* Skill Matrix */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 mb-4">
-            <h3 className="text-lg font-bold text-gray-800">スキル・優先順位マトリックス</h3>
-            <div className="flex items-center gap-3">
-              <div className="flex bg-gray-100 rounded-lg p-0.5">
-                <button
-                  onClick={() => setMatrixView('speed')}
-                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${matrixView === 'speed' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-500'}`}
-                >時間</button>
-                <button
-                  onClick={() => setMatrixView('priority')}
-                  className={`px-3 py-1 rounded-md text-xs font-semibold transition-colors ${matrixView === 'priority' ? 'bg-white text-purple-700 shadow-sm' : 'text-gray-500'}`}
-                >優先順位</button>
-              </div>
-              <select value={matrixCategory} onChange={e => setMatrixCategory(e.target.value)} className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white">
-                {TASK_CATEGORIES.map(cat => <option key={cat} value={cat}>{cat}</option>)}
-              </select>
-            </div>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="text-left text-gray-500 border-b">
-                  <th className="pb-2 pr-4 font-medium sticky left-0 bg-white z-10">メンバー</th>
-                  {matrixTasks.map(td => (
-                    <th key={td.id} className="pb-2 px-2 text-center font-medium text-xs whitespace-nowrap">{td.name.replace(/^【[^】]+】/, '')}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {membersList.map(m => (
-                  <tr key={m.id} className="border-b border-gray-50">
-                    <td className="py-2 pr-4 font-medium text-gray-800 sticky left-0 bg-white z-10">{m.name}</td>
-                    {matrixTasks.map(td => {
-                      const hasSkill = m.skills.includes(td.name);
-                      const speed = m.speedRatings[td.name];
-                      const priority = (m.priorityRatings || {})[td.name];
-                      const displayValue = matrixView === 'speed' ? speed : priority;
-                      const colorClass = matrixView === 'speed'
-                        ? 'bg-green-100 text-green-700'
-                        : priority === 1 ? 'bg-purple-200 text-purple-800 font-bold' :
-                          priority === 2 ? 'bg-purple-100 text-purple-700' :
-                          priority === 3 ? 'bg-purple-50 text-purple-600' :
-                          'bg-gray-100 text-gray-600';
-                      return (
-                        <td key={td.id} className="py-2 px-2 text-center">
-                          {hasSkill ? (
-                            <span className={`inline-block w-8 h-8 leading-8 rounded-full text-xs font-semibold ${colorClass}`}>
-                              {displayValue != null ? displayValue : '○'}
-                            </span>
-                          ) : (
-                            <span className="text-gray-300">-</span>
-                          )}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-3 flex gap-4 text-xs text-gray-400">
-            {matrixView === 'priority' && (
-              <>
-                <span><span className="inline-block w-3 h-3 rounded-full bg-purple-200 mr-1" />P1=最優先</span>
-                <span><span className="inline-block w-3 h-3 rounded-full bg-purple-100 mr-1" />P2</span>
-                <span><span className="inline-block w-3 h-3 rounded-full bg-purple-50 mr-1" />P3</span>
-                <span>○=優先順位未設定</span>
-              </>
-            )}
           </div>
         </div>
 
