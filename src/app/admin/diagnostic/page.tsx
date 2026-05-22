@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
 import { STORAGE_KEYS, SYNC_KEYS } from '@/lib/store';
+import { listBackups, createManualBackup, restoreKeyFromBackup, type BackupSummary } from '@/lib/backup';
 
 type DumpRow = {
   key: string;
@@ -29,6 +30,11 @@ export default function DiagnosticPage() {
   const [coverage, setCoverage] = useState<DayCoverage[]>([]);
   const [month, setMonth] = useState('2026-05');
   const [err, setErr] = useState<string>('');
+  const [backups, setBackups] = useState<BackupSummary[]>([]);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [restoreDate, setRestoreDate] = useState('');
+  const [restoreKey, setRestoreKey] = useState<string>(STORAGE_KEYS.actualTimeline);
+  const [restoreMode, setRestoreMode] = useState<'replace' | 'merge'>('merge');
 
   async function loadAll() {
     setLoading(true);
@@ -113,8 +119,47 @@ export default function DiagnosticPage() {
 
   useEffect(() => {
     loadAll();
+    loadBackups();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
+
+  async function loadBackups() {
+    try {
+      const list = await listBackups();
+      setBackups(list);
+    } catch (e) {
+      console.error('listBackups error', e);
+    }
+  }
+
+  async function handleManualBackup() {
+    if (!confirm('現在の Firestore データをスナップショットとして保存します。よろしいですか？')) return;
+    setBackupBusy(true);
+    try {
+      const date = await createManualBackup();
+      alert(`バックアップ完了: ${date}`);
+      await loadBackups();
+    } catch (e) {
+      alert('バックアップ失敗: ' + String(e));
+    } finally {
+      setBackupBusy(false);
+    }
+  }
+
+  async function handleRestore() {
+    if (!restoreDate) { alert('復元元の日付を選択してください'); return; }
+    const modeLabel = restoreMode === 'replace' ? '完全上書き' : 'マージ（既存優先で穴埋め）';
+    if (!confirm(`${restoreDate} のバックアップから "${restoreKey}" を ${modeLabel} で復元します。よろしいですか？`)) return;
+    setBackupBusy(true);
+    try {
+      await restoreKeyFromBackup(restoreDate, restoreKey, restoreMode);
+      alert('復元完了。ページをリロードしてください。');
+    } catch (e) {
+      alert('復元失敗: ' + String(e));
+    } finally {
+      setBackupBusy(false);
+    }
+  }
 
   function downloadJSON() {
     const blob = new Blob([JSON.stringify(rows, null, 2)], { type: 'application/json' });
@@ -227,6 +272,89 @@ export default function DiagnosticPage() {
               })}
             </tbody>
           </table>
+        </div>
+
+        {/* Backup management */}
+        <div className="bg-white rounded shadow p-4 mb-6 border-2 border-emerald-200">
+          <h2 className="font-bold mb-2 text-emerald-800">🗄️ 自動バックアップ管理</h2>
+          <p className="text-xs text-gray-600 mb-3">
+            毎日のアプリ起動時に Firestore の全データを <code className="bg-gray-100 px-1">appDataBackups/YYYY-MM-DD</code> に自動スナップショット。
+            過去30日分を自動保持します。
+          </p>
+
+          <div className="flex gap-2 mb-4">
+            <button
+              onClick={handleManualBackup}
+              disabled={backupBusy}
+              className="px-4 py-1 bg-emerald-600 text-white rounded text-sm disabled:opacity-50"
+            >
+              📸 今すぐ手動バックアップ
+            </button>
+            <button onClick={loadBackups} className="px-4 py-1 bg-gray-500 text-white rounded text-sm">🔄 一覧更新</button>
+          </div>
+
+          <div className="mb-4">
+            <h3 className="font-semibold text-sm mb-1">保存済みバックアップ ({backups.length}件)</h3>
+            {backups.length === 0 ? (
+              <p className="text-xs text-gray-500">まだバックアップがありません。</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="text-left p-2">日付</th>
+                    <th className="text-left p-2">作成日時</th>
+                    <th className="text-right p-2">サイズ(文字)</th>
+                    <th className="text-left p-2">含まれるキー数</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {backups.map(b => (
+                    <tr key={b.date} className="border-t">
+                      <td className="p-2 font-mono">{b.date}</td>
+                      <td className="p-2">{b.createdAt ? new Date(b.createdAt).toLocaleString('ja-JP') : '-'}</td>
+                      <td className="p-2 text-right">{b.size.toLocaleString()}</td>
+                      <td className="p-2">{b.keys.length}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+
+          <div className="border-t pt-3">
+            <h3 className="font-semibold text-sm mb-2">🔧 バックアップから復元</h3>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-2 mb-2">
+              <div>
+                <label className="text-xs text-gray-600 block mb-1">復元元の日付</label>
+                <select value={restoreDate} onChange={e => setRestoreDate(e.target.value)} className="border rounded px-2 py-1 w-full text-sm">
+                  <option value="">-- 選択 --</option>
+                  {backups.map(b => (<option key={b.date} value={b.date}>{b.date}</option>))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-600 block mb-1">復元するキー</label>
+                <select value={restoreKey} onChange={e => setRestoreKey(e.target.value)} className="border rounded px-2 py-1 w-full text-sm">
+                  {Array.from(SYNC_KEYS).map(k => (<option key={k} value={k}>{k}</option>))}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-600 block mb-1">モード</label>
+                <select value={restoreMode} onChange={e => setRestoreMode(e.target.value as 'replace' | 'merge')} className="border rounded px-2 py-1 w-full text-sm">
+                  <option value="merge">マージ（既存優先で穴埋め）</option>
+                  <option value="replace">完全上書き（注意）</option>
+                </select>
+              </div>
+              <div className="flex items-end">
+                <button onClick={handleRestore} disabled={backupBusy || !restoreDate} className="w-full px-4 py-1 bg-orange-600 text-white rounded text-sm disabled:opacity-50">
+                  ⚠️ 復元実行
+                </button>
+              </div>
+            </div>
+            <p className="text-[10px] text-gray-500">
+              ※ マージ: バックアップは「穴埋め」専用。現在のデータが優先され、バックアップにしかないエントリだけが追加される。
+              ※ 完全上書き: 現在のデータがバックアップ時点に巻き戻る（取り扱い注意）。
+            </p>
+          </div>
         </div>
 
         {/* Raw JSON for actualTimeline and actualPerformance */}

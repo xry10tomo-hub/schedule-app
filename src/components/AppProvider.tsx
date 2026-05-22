@@ -41,6 +41,7 @@ function mergeArraysById(localData: unknown, remoteData: unknown): unknown[] | n
 }
 import { db } from '@/lib/firebase';
 import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
+import { ensureDailyBackup } from '@/lib/backup';
 import type { Member } from '@/lib/types';
 
 export default function AppProvider({ children }: { children: React.ReactNode }) {
@@ -164,6 +165,9 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       } catch (err) {
         console.error('Task migration error:', err);
       }
+
+      // Trigger daily Firestore snapshot (idempotent, skips if today's backup exists)
+      ensureDailyBackup().catch(err => console.warn('[Backup] init error:', err));
 
       setLoading(false);
     }

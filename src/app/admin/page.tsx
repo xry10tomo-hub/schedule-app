@@ -134,12 +134,13 @@ export default function AdminPage() {
     }
 
     // For each task and each day, compute the value
-    const data: Record<string, Record<number, { minutes: number; count: number; points: number }>> = {};
+    const data: Record<string, Record<number, { minutes: number; count: number; points: number; isEstimate?: boolean }>> = {};
     for (const tn of taskNames) {
       data[tn] = {};
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
         let minutes = 0, count = 0, points = 0;
+        let isEstimate = false;
 
         // ① 実績タイムラインブロック（15分/ブロック）
         const dateActualTl = monthData.allActualTl[dateStr] || {};
@@ -180,12 +181,33 @@ export default function AdminPage() {
           });
         }
 
-        data[tn][d] = { minutes, count, points };
+        // ⑤ 実績時間が0で件数/点数がある場合 → 件数 × 個人スピードで推定（過去データ消失の救済）
+        if (minutes === 0 && (count > 0 || points > 0)) {
+          const datePerf = monthData.allPerf[dateStr] || {};
+          const usePoints = POINTS_BASED_SPEED_TASKS.includes(tn);
+          let estMins = 0;
+          Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
+            if (selectedMemberId && memberId !== selectedMemberId) return;
+            const entry = taskPerfs[tn];
+            if (!entry) return;
+            const member = members.find(mb => mb.id === memberId);
+            const speed = member?.speedRatings?.[tn] || 0;
+            if (speed <= 0) return;
+            const qty = usePoints ? (entry.points || 0) : (entry.count || 0);
+            estMins += qty * speed;
+          });
+          if (estMins > 0) {
+            minutes = Math.round(estMins);
+            isEstimate = true;
+          }
+        }
+
+        data[tn][d] = { minutes, count, points, isEstimate };
       }
     }
     return { taskNames, data };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allTasks, monthData, daysInMonth, monthStr, selectedMemberId, showAllTasks]);
+  }, [allTasks, monthData, daysInMonth, monthStr, selectedMemberId, showAllTasks, members]);
 
   function formatCellByMetric(taskName: string, d: number, m: Metric): string {
     const cell = matrix.data[taskName]?.[d] || { minutes: 0, count: 0, points: 0 };
@@ -430,7 +452,10 @@ export default function AdminPage() {
 
         {/* Matrix table: row=task×metric, col=day (4 sub-rows per task) */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-          <h3 className="text-sm font-bold text-gray-700 mb-3">業務 × 日別 マトリックス（4指標同時表示）</h3>
+          <h3 className="text-sm font-bold text-gray-700 mb-1">業務 × 日別 マトリックス（4指標同時表示）</h3>
+          <p className="text-[10px] text-gray-500 mb-3">
+            <span className="italic opacity-60">数値*</span> は推定値（件数×個人スピード設定）。実績タイムライン未記録の日のため、件数とスピード設定から逆算しています。
+          </p>
           <div className="overflow-x-auto max-h-[75vh] overflow-y-auto">
             <table className="text-[11px] border-collapse">
               <thead className="sticky top-0 bg-white z-20">
@@ -468,8 +493,16 @@ export default function AdminPage() {
                         </td>
                         {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(d => {
                           const v = formatCellByMetric(tn, d, m);
+                          const cell = matrix.data[tn]?.[d];
+                          const isEst = !!cell?.isEstimate && (m === 'minutes' || m === 'speed');
                           return (
-                            <td key={d} className={`border border-gray-100 px-1 py-1 text-center ${METRIC_TEXT[m]}`}>{v}</td>
+                            <td
+                              key={d}
+                              className={`border border-gray-100 px-1 py-1 text-center ${METRIC_TEXT[m]} ${isEst ? 'italic opacity-60' : ''}`}
+                              title={isEst ? '推定値（件数×個人スピード設定）' : undefined}
+                            >
+                              {v}{isEst && v ? '*' : ''}
+                            </td>
                           );
                         })}
                         <td className={`sticky right-0 border border-amber-200 px-2 py-1 text-center font-bold ${METRIC_BG[m]} ${METRIC_TEXT[m]}`}>
