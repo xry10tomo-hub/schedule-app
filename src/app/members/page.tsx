@@ -439,7 +439,8 @@ export default function MembersPage() {
                 スキル・優先順位マトリックス
               </h3>
               <p className="text-xs text-gray-500 mt-1">
-                セルをクリックして直接入力 → 自動割振のマスターデータになります（P1=最優先・空欄=対応不可）
+                メンバーのスキル・実力の参考データ（セルクリックで編集）。
+                <span className="text-amber-700 font-semibold"> ※自動割振は「日次業務入力画面」の対応可能メンバー・実施時間を使用します</span>
               </p>
             </div>
             <div className="flex items-center gap-3">

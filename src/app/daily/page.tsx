@@ -782,7 +782,9 @@ export default function DailyPage() {
         {viewTab === 'plan' && (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
             <div className="bg-blue-50 border-b border-blue-100 px-4 py-2 text-[11px] text-blue-700">
-              💡 対応可能メンバー・実施時間は<strong>業務全体の設定</strong>です（毎日同じ設定で適用 / 自動割振にも連携）
+              💡 <strong>対応可能メンバー</strong>と<strong>実施時間</strong>は<strong>業務単位のグローバル設定</strong>です：
+              日付を変えても保持され、毎日同じ設定で自動適用されます。
+              <span className="text-purple-700 font-semibold"> → このデータがそのまま「自動割振」画面で使われます</span>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

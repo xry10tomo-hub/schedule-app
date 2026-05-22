@@ -361,6 +361,14 @@ export default function AutoAssignPage() {
           <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{date}</span>
         </div>
 
+        {/* Data source banner */}
+        <div className="bg-purple-50 border-l-4 border-purple-400 rounded-lg px-4 py-3 text-sm text-purple-800">
+          🔗 <strong>データ連携：</strong>
+          このページは <a href="/daily" className="underline font-semibold">日次業務入力画面</a> で設定した
+          「<strong>対応可能メンバー</strong>（選択順=優先順位）」と「<strong>実施時間</strong>」を直接読み込んで割振します。
+          設定変更は日次業務入力画面で行ってください（業務単位のグローバル設定なので、日付を変えても保持されます）。
+        </div>
+
         {/* Status cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white rounded-lg px-4 py-3 border border-green-200 shadow-sm">
