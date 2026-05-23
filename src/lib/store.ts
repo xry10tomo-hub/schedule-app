@@ -259,8 +259,34 @@ export function setTaskAssignments(data: Record<string, TaskAssignmentConfig>) {
   setToStorage('schedule_task_assignments', data);
 }
 
-// ============ No-break members (per-date) ============
-// Stores which members skip the 11:30-13:30 break on a given date. Used by auto-assign.
+// ============ Break slots (per-date, per-member) ============
+// 'early' = 12:00-13:00, 'late' = 13:15-14:15, 'skip' = no break.
+export type BreakSlot = 'early' | 'late' | 'skip';
+// Default break slot by member name (when not explicitly set)
+const DEFAULT_EARLY_BREAK_NAMES = ['潮田', '国兼', '三原', '石井'];
+const DEFAULT_LATE_BREAK_NAMES = ['和田', '熊谷', '鈴木'];
+export function getDefaultBreakSlot(memberName: string): BreakSlot {
+  if (DEFAULT_EARLY_BREAK_NAMES.includes(memberName)) return 'early';
+  if (DEFAULT_LATE_BREAK_NAMES.includes(memberName)) return 'late';
+  return 'early'; // fallback for unlisted members
+}
+export function getBreakSlotsAll(): Record<string, Record<string, BreakSlot>> {
+  return getFromStorage<Record<string, Record<string, BreakSlot>>>(STORAGE_KEYS.breakSlots, {});
+}
+export function getBreakSlotsForDate(date: string): Record<string, BreakSlot> {
+  return getBreakSlotsAll()[date] || {};
+}
+export function setBreakSlotForDate(date: string, memberId: string, slot: BreakSlot | null) {
+  const all = getBreakSlotsAll();
+  const day = { ...(all[date] || {}) };
+  if (slot === null) delete day[memberId];
+  else day[memberId] = slot;
+  if (Object.keys(day).length === 0) delete all[date];
+  else all[date] = day;
+  setToStorage(STORAGE_KEYS.breakSlots, all);
+}
+
+// ============ Legacy: No-break members (kept for backward compatibility) ============
 export function getNoBreakMembersAll(): Record<string, string[]> {
   return getFromStorage<Record<string, string[]>>(STORAGE_KEYS.noBreakMembers, {});
 }
@@ -322,7 +348,8 @@ export const STORAGE_KEYS = {
   fixedTaskDefaults: 'schedule_fixed_task_defaults',
   taskAssignments: 'schedule_task_assignments',
   memberTasks: 'schedule_member_tasks',
-  noBreakMembers: 'schedule_no_break_members', // date → memberId[]: members who skip break on a given day
+  noBreakMembers: 'schedule_no_break_members', // legacy: date → memberId[]
+  breakSlots: 'schedule_break_slots', // date → memberId → 'early' | 'late' | 'skip'
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -343,6 +370,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.taskAssignments,
   STORAGE_KEYS.memberTasks,
   STORAGE_KEYS.noBreakMembers,
+  STORAGE_KEYS.breakSlots,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {

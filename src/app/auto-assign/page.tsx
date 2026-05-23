@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, getNoBreakMembersForDate, setNoBreakMembersForDate, DEFAULT_TASKS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, getBreakSlotsForDate, setBreakSlotForDate, getDefaultBreakSlot, type BreakSlot, DEFAULT_TASKS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
 import type { DailyTask, Member, ShiftEntry } from '@/lib/types';
 
 // ===== Timeline Constants =====
@@ -11,10 +11,14 @@ const TIMELINE_END = 22; // 22:00
 const BLOCKS_PER_HOUR = 4; // 15-min blocks
 const TOTAL_BLOCKS = (TIMELINE_END - TIMELINE_START) * BLOCKS_PER_HOUR; // 56
 
-// Break window: 11:30-13:30
-const BREAK_WINDOW_START_BLOCK = (11.5 - TIMELINE_START) * BLOCKS_PER_HOUR; // 14
-const BREAK_DURATION_BLOCKS = 4; // 1 hour = 4 blocks
+// Break window: 12:00-14:30 (1 hour break per member)
+const BREAK_DURATION_BLOCKS = 4; // 1 hour = 4 blocks (15min each)
+const EARLY_BREAK_START_BLOCK = (12 - TIMELINE_START) * BLOCKS_PER_HOUR;   // 16 = 12:00
+const LATE_BREAK_START_BLOCK = ((13 - TIMELINE_START) * BLOCKS_PER_HOUR) + 1; // 21 = 13:15
 const BREAK_TASK_NAME = '【他】休憩';
+// Periodic tasks: should be placed at intervals (not consecutive) — 15 min work every ~45 min
+const PERIODIC_TASKS = ['【LINE】LINE整理', '【LINE】要対応'];
+const PERIODIC_GAP_BLOCKS = 3; // 3 blocks = 45 min between consecutive placements
 
 // Use category-based colors (defined in store.ts)
 
@@ -42,11 +46,52 @@ interface AssignableTask {
   minutesPerUnit: number; // default minutes-per-unit from DailyTask, used as fallback speed
 }
 
+// Place blocks for a member, respecting "periodic" tasks: leave ~30min gap between consecutive blocks.
+// Returns the count of blocks actually placed.
+function placeBlocksForMember(
+  memberId: string,
+  taskName: string,
+  count: number,
+  availableBlocks: number[],
+  timeline: Record<string, Record<string, string>>,
+  periodic: boolean,
+  inRangeOnly?: { start: number; end: number }
+): { placed: number; used: number[] } {
+  if (count <= 0 || availableBlocks.length === 0) return { placed: 0, used: [] };
+  const filtered = inRangeOnly
+    ? availableBlocks.filter(b => b >= inRangeOnly.start && b < inRangeOnly.end)
+    : availableBlocks;
+  if (filtered.length === 0) return { placed: 0, used: [] };
+
+  const used: number[] = [];
+  if (!periodic) {
+    // Consecutive placement (default)
+    const toAssign = Math.min(count, filtered.length);
+    for (let i = 0; i < toAssign; i++) {
+      timeline[memberId][String(filtered[i])] = taskName;
+      used.push(filtered[i]);
+    }
+    return { placed: toAssign, used };
+  }
+
+  // Periodic: enforce ~PERIODIC_GAP_BLOCKS gap between consecutive placements (by absolute block index)
+  let lastPlaced = -PERIODIC_GAP_BLOCKS;
+  for (const b of filtered) {
+    if (used.length >= count) break;
+    if (b - lastPlaced >= PERIODIC_GAP_BLOCKS) {
+      timeline[memberId][String(b)] = taskName;
+      used.push(b);
+      lastPlaced = b;
+    }
+  }
+  return { placed: used.length, used };
+}
+
 function runAutoAssignAlgorithm(
   tasks: DailyTask[],
   activeMembers: Member[],
   shifts: ShiftEntry[],
-  noBreakMemberIds: string[] = []
+  breakSlotsMap: Record<string, BreakSlot> = {}
 ): Record<string, Record<string, string>> {
   // Result: { [memberId]: { [blockIndex]: taskName } }
   const timeline: Record<string, Record<string, string>> = {};
@@ -71,23 +116,19 @@ function runAutoAssignAlgorithm(
   }
 
   // ===== Step 1: Assign breaks =====
-  // Stagger breaks within 11:30-13:30 window
-  // Group 1: 11:30-12:30 (blocks 14-17)
-  // Group 2: 12:30-13:30 (blocks 18-21)
-  // 休憩なしメンバー (noBreakMemberIds) はこの工程をスキップ → 12:45他の時間帯も業務に使える
+  // Break window: 12:00-14:30. Per-member slot from breakSlotsMap (fallback: default by name)
+  //   - 'early' (12:00-13:00, blocks 16-19)
+  //   - 'late'  (13:15-14:15, blocks 21-24)
+  //   - 'skip'  (no break — 12:00-14:30 fully available for business)
   const membersWithShifts = activeMembers.filter(m => memberAvailableBlocks[m.id]?.length > 0);
-  const breakEligible = membersWithShifts.filter(m => !noBreakMemberIds.includes(m.id));
-  const halfCount = Math.ceil(breakEligible.length / 2);
 
-  breakEligible.forEach((member, idx) => {
-    const breakStartBlock = idx < halfCount
-      ? BREAK_WINDOW_START_BLOCK // 11:30
-      : BREAK_WINDOW_START_BLOCK + BREAK_DURATION_BLOCKS; // 12:30
-
-    for (let b = breakStartBlock; b < breakStartBlock + BREAK_DURATION_BLOCKS; b++) {
+  membersWithShifts.forEach(member => {
+    const slot: BreakSlot = breakSlotsMap[member.id] || getDefaultBreakSlot(member.name);
+    if (slot === 'skip') return;
+    const startBlock = slot === 'early' ? EARLY_BREAK_START_BLOCK : LATE_BREAK_START_BLOCK;
+    for (let b = startBlock; b < startBlock + BREAK_DURATION_BLOCKS; b++) {
       if (memberAvailableBlocks[member.id]?.includes(b)) {
         timeline[member.id][String(b)] = BREAK_TASK_NAME;
-        // Remove from available
         memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== b);
       }
     }
@@ -220,15 +261,13 @@ function runAutoAssignAlgorithm(
   // ===== Step 4: Assign remaining tasks to timeline =====
   for (const task of assignableTasks) {
     let remaining = task.blocksNeeded;
+    const isPeriodic = PERIODIC_TASKS.includes(task.taskName);
 
     if (task.assigneeId) {
       const available = memberAvailableBlocks[task.assigneeId] || [];
-      const toAssign = Math.min(remaining, available.length);
-      for (let i = 0; i < toAssign; i++) {
-        timeline[task.assigneeId][String(available[i])] = task.taskName;
-      }
-      memberAvailableBlocks[task.assigneeId] = available.slice(toAssign);
-      remaining -= toAssign;
+      const r = placeBlocksForMember(task.assigneeId, task.taskName, remaining, available, timeline, isPeriodic);
+      memberAvailableBlocks[task.assigneeId] = available.filter(b => !r.used.includes(b));
+      remaining -= r.placed;
     }
 
     if (remaining <= 0) continue;
@@ -243,62 +282,47 @@ function runAutoAssignAlgorithm(
     const N = cfg?.assigneeCount && cfg.assigneeCount > 0 ? cfg.assigneeCount : allCapable.length;
     const effectiveN = task.assigneeId ? Math.max(0, N - 1) : N;
     const topNCapable = allCapable.slice(0, effectiveN);
-    const overflowCapable = allCapable.slice(effectiveN); // beyond N — used in pass 2 if still GAP
+    const overflowCapable = allCapable.slice(effectiveN);
 
     // ===== Pass 1: distribute work across top N capable members, weighted by speed =====
-    // 速度（speedRatings[taskName]: 1点/件あたり分）が設定されていれば、速い人ほど多く担当。
-    // 例: A=5分/点, B=10分/点 → A は B の倍の作業量を担当
     if (topNCapable.length > 0 && remaining > 0) {
       const defaultSpeed = (task.minutesPerUnit && task.minutesPerUnit > 0) ? task.minutesPerUnit : 1;
       const weights = topNCapable.map(m => {
         const s = m.speedRatings?.[task.taskName];
-        // Faster (smaller speed) = higher weight. If unset, fall back to task's default speed.
         return 1 / Math.max((s && s > 0) ? s : defaultSpeed, 0.1);
       });
       const totalWeight = weights.reduce((sum, w) => sum + w, 0);
       const totalRemaining = remaining;
-      // Compute target block share per member (round; last member soaks up rounding remainder)
       const targets: number[] = topNCapable.map((_, idx) => {
-        if (idx === topNCapable.length - 1) return -1; // marker for last
+        if (idx === topNCapable.length - 1) return -1;
         return Math.round((weights[idx] / totalWeight) * totalRemaining);
       });
-      // Last member gets whatever's left (so totals match)
       let alloc = 0;
-      targets.forEach((t, i) => { if (t >= 0) alloc += t; });
+      targets.forEach(t => { if (t >= 0) alloc += t; });
       if (targets.length > 0) targets[targets.length - 1] = Math.max(0, totalRemaining - alloc);
 
       topNCapable.forEach((member, idx) => {
         if (remaining <= 0) return;
         const available = memberAvailableBlocks[member.id] || [];
-        if (available.length === 0) return;
-        const want = targets[idx];
-        const toAssign = Math.min(want, available.length, remaining);
-        for (let i = 0; i < toAssign; i++) {
-          timeline[member.id][String(available[i])] = task.taskName;
-        }
-        memberAvailableBlocks[member.id] = available.slice(toAssign);
-        remaining -= toAssign;
+        const want = Math.min(targets[idx], remaining);
+        const r = placeBlocksForMember(member.id, task.taskName, want, available, timeline, isPeriodic);
+        memberAvailableBlocks[member.id] = available.filter(b => !r.used.includes(b));
+        remaining -= r.placed;
       });
     }
 
-    // ===== Pass 2: if still remaining, expand to OTHER assignable members beyond top N =====
-    // (Better to use someone who can do this task — even if "over" 対応人数 — than to leave GAP.)
+    // ===== Pass 2: expand to OTHER assignable members beyond top N if still remaining =====
     if (remaining > 0) {
       for (const member of overflowCapable) {
         if (remaining <= 0) break;
         const available = memberAvailableBlocks[member.id] || [];
-        if (available.length === 0) continue;
-        const toAssign = Math.min(remaining, available.length);
-        for (let i = 0; i < toAssign; i++) {
-          timeline[member.id][String(available[i])] = task.taskName;
-        }
-        memberAvailableBlocks[member.id] = available.slice(toAssign);
-        remaining -= toAssign;
+        const r = placeBlocksForMember(member.id, task.taskName, remaining, available, timeline, isPeriodic);
+        memberAvailableBlocks[member.id] = available.filter(b => !r.used.includes(b));
+        remaining -= r.placed;
       }
     }
 
     // ===== Pass 3: ONLY if assigneeCount was NOT set, fall back to least-loaded ANY member =====
-    // (When assigneeCount is set, do NOT cross over to non-assignable members to keep config strict.)
     const strictCount = cfg?.assigneeCount && cfg.assigneeCount > 0;
     if (remaining > 0 && !strictCount) {
       const sortedByLoad = [...membersWithShifts].sort((a, b) =>
@@ -306,16 +330,11 @@ function runAutoAssignAlgorithm(
       );
       for (const member of sortedByLoad) {
         if (remaining <= 0) break;
-        // Skip members already considered as capable
         if (allCapable.find(c => c.id === member.id)) continue;
         const available = memberAvailableBlocks[member.id] || [];
-        if (available.length === 0) continue;
-        const toAssign = Math.min(remaining, available.length);
-        for (let i = 0; i < toAssign; i++) {
-          timeline[member.id][String(available[i])] = task.taskName;
-        }
-        memberAvailableBlocks[member.id] = available.slice(toAssign);
-        remaining -= toAssign;
+        const r = placeBlocksForMember(member.id, task.taskName, remaining, available, timeline, isPeriodic);
+        memberAvailableBlocks[member.id] = available.filter(b => !r.used.includes(b));
+        remaining -= r.placed;
       }
     }
   }
@@ -330,7 +349,7 @@ export default function AutoAssignPage() {
   const [tasks, setTasksState] = useState<DailyTask[]>([]);
   const [applied, setApplied] = useState(false);
   const [unassignedWarnings, setUnassignedWarnings] = useState<string[]>([]);
-  const [noBreakIds, setNoBreakIdsState] = useState<string[]>([]);
+  const [breakSlots, setBreakSlotsState] = useState<Record<string, BreakSlot>>({});
 
   // Load daily tasks for selected date
   useEffect(() => {
@@ -339,13 +358,16 @@ export default function AutoAssignPage() {
     setPreviewTimeline(null);
     setApplied(false);
     setUnassignedWarnings([]);
-    setNoBreakIdsState(getNoBreakMembersForDate(date));
+    setBreakSlotsState(getBreakSlotsForDate(date));
   }, [date, dataVersion]);
 
-  function toggleNoBreak(memberId: string) {
-    const next = noBreakIds.includes(memberId) ? noBreakIds.filter(id => id !== memberId) : [...noBreakIds, memberId];
-    setNoBreakIdsState(next);
-    setNoBreakMembersForDate(date, next);
+  function setMemberBreakSlot(memberId: string, slot: BreakSlot) {
+    const next = { ...breakSlots, [memberId]: slot };
+    setBreakSlotsState(next);
+    setBreakSlotForDate(date, memberId, slot);
+  }
+  function effectiveSlot(member: Member): BreakSlot {
+    return breakSlots[member.id] || getDefaultBreakSlot(member.name);
   }
 
   const shiftsForDate = getShifts().filter(s => s.date === date);
@@ -380,7 +402,7 @@ export default function AutoAssignPage() {
       return;
     }
 
-    const result = runAutoAssignAlgorithm(tasks, activeMembers, shiftsForDate, noBreakIds);
+    const result = runAutoAssignAlgorithm(tasks, activeMembers, shiftsForDate, breakSlots);
     setPreviewTimeline(result);
     setApplied(false);
 
@@ -495,7 +517,7 @@ export default function AutoAssignPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-gray-600">
             <div className="space-y-2">
               <p><span className="font-bold text-green-700">1.</span> シフト登録済みメンバーの出勤時間を確認</p>
-              <p><span className="font-bold text-green-700">2.</span> 全員に休憩を割当（11:30〜13:30の間に1時間）<span className="text-amber-700">※下の「休憩なしメンバー」で除外可能</span></p>
+              <p><span className="font-bold text-green-700">2.</span> 全員に休憩を割当（<strong>12:00-14:30</strong>の間に1時間: 早12:00/遅13:15）<span className="text-amber-700">※下で個別変更可</span></p>
               <p><span className="font-bold text-green-700">3.</span> 日次業務入力で「実施時間」が設定されたタスクを指定時間に固定配置</p>
               <p><span className="font-bold text-green-700">4.</span> 「対応可能メンバー」の選択順を優先順位として割振</p>
             </div>
@@ -506,44 +528,42 @@ export default function AutoAssignPage() {
             </div>
           </div>
 
-          {/* 条件設定: 休憩なしメンバー */}
+          {/* 条件設定: 休憩スロット選択 */}
           <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
-            <p className="text-xs font-bold text-amber-900 mb-2">🚫 条件設定: 休憩なしメンバー（本日のみ）</p>
+            <p className="text-xs font-bold text-amber-900 mb-2">🍱 条件設定: 休憩時間（本日のみ）</p>
             <p className="text-[11px] text-amber-700 mb-2">
-              チェックを入れたメンバーは 11:30〜13:30 の休憩割当を <strong>スキップ</strong> し、その時間帯も業務に使えます。
-              （例：佐藤にチェック → 12:45〜の業務に佐藤を投入可能）
+              休憩窓 12:00〜14:30 の中で各メンバーの休憩開始時刻を選択：
+              <span className="ml-2 px-1.5 py-0.5 bg-blue-100 text-blue-800 rounded font-bold">12:00 (早)</span>
+              <span className="ml-1 px-1.5 py-0.5 bg-purple-100 text-purple-800 rounded font-bold">13:15 (遅)</span>
+              <span className="ml-1 px-1.5 py-0.5 bg-gray-100 text-gray-700 rounded font-bold">なし</span>
+              （初期値は名前から自動: 潮田/国兼/三原/石井=早、和田/熊谷/鈴木=遅）
             </p>
             {activeMembers.length === 0 ? (
               <p className="text-[11px] text-gray-500">出勤メンバーがいません</p>
             ) : (
-              <div className="flex flex-wrap gap-2">
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
                 {activeMembers.map(m => {
-                  const isNoBreak = noBreakIds.includes(m.id);
+                  const slot = effectiveSlot(m);
                   return (
-                    <label
-                      key={m.id}
-                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer border transition-colors ${
-                        isNoBreak
-                          ? 'bg-amber-200 text-amber-900 border-amber-400 font-bold'
-                          : 'bg-white text-gray-600 border-gray-300 hover:bg-amber-50'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isNoBreak}
-                        onChange={() => toggleNoBreak(m.id)}
-                        className="accent-amber-600"
-                      />
-                      {m.name}
-                    </label>
+                    <div key={m.id} className="flex items-center gap-1.5 bg-white border border-amber-200 rounded px-2 py-1">
+                      <span className="text-xs font-medium text-gray-700 flex-1 truncate">{m.name}</span>
+                      <select
+                        value={slot}
+                        onChange={e => setMemberBreakSlot(m.id, e.target.value as BreakSlot)}
+                        className={`text-[10px] border rounded px-1 py-0.5 font-bold ${
+                          slot === 'early' ? 'bg-blue-50 text-blue-800 border-blue-200' :
+                          slot === 'late' ? 'bg-purple-50 text-purple-800 border-purple-200' :
+                          'bg-gray-50 text-gray-700 border-gray-300'
+                        }`}
+                      >
+                        <option value="early">12:00 早</option>
+                        <option value="late">13:15 遅</option>
+                        <option value="skip">なし</option>
+                      </select>
+                    </div>
                   );
                 })}
               </div>
-            )}
-            {noBreakIds.length > 0 && (
-              <p className="text-[11px] text-amber-800 mt-2">
-                <strong>{noBreakIds.length}名</strong>が休憩スキップ → 12:45他の時間帯も業務割当の対象になります
-              </p>
             )}
           </div>
 
