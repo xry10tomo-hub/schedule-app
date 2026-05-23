@@ -96,11 +96,17 @@ function runAutoAssignAlgorithm(
   // ===== Read taskAssignments (per-task config from 日次業務入力) =====
   const taskAssignmentsCfg = getTaskAssignments();
 
-  // ===== Step 2: Place tasks with scheduled times (実施時間) first =====
-  const scheduledTasksHandled = new Set<string>();
+  // ===== Step 2: Place tasks with scheduled times (実施時間) — capped at 必要時間 =====
+  // BUGFIX: previously this placed all priorityMembers × full window blocks, ignoring
+  // task.plannedMinutes. That caused massive over-assignment (e.g. 計算書作成 900分 →
+  // 3 members × 480 min = 1440 min assigned). Now we cap at plannedMinutes and distribute
+  // by speed-weighted shares within the time window.
+  const blocksPlacedInStep2: Record<string, number> = {};
+  const processedTaskNamesStep2 = new Set<string>();
 
   for (const task of tasks) {
     if (task.taskName === BREAK_TASK_NAME) continue;
+    if (processedTaskNamesStep2.has(task.taskName)) continue; // dedupe by name (固定+引継ぎが重複時)
     const cfg = taskAssignmentsCfg[task.taskName];
     if (!cfg) continue;
 
@@ -115,47 +121,90 @@ function runAutoAssignAlgorithm(
     }
     if (ranges.length === 0) continue;
 
+    processedTaskNamesStep2.add(task.taskName);
+
+    // Total blocks needed (sum across duplicate rows with same taskName)
+    const totalPlannedMin = tasks
+      .filter(t => t.taskName === task.taskName)
+      .reduce((s, t) => s + t.plannedMinutes, 0);
+    const blocksNeeded = Math.max(1, Math.ceil(totalPlannedMin / 15));
+    let remaining = blocksNeeded;
+
     const allCapable = (cfg.assignableMemberIds || [])
       .map(id => activeMembers.find(m => m.id === id))
       .filter(Boolean) as Member[];
-    // 対応人数 (assigneeCount): if set, limit to top-N members in priority order.
-    // 0 / undefined = no limit (use all assignable members).
+    if (allCapable.length === 0) continue;
+
     const N = cfg.assigneeCount && cfg.assigneeCount > 0 ? cfg.assigneeCount : allCapable.length;
     const priorityMembers = allCapable.slice(0, N);
 
-    for (const range of ranges) {
-      const [startH, startM] = range.start.split(':').map(Number);
-      const [endH, endM] = range.end.split(':').map(Number);
-      const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
-      const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
-      if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
-      // Place blocks for assignable members in priority order (selected order, capped at 対応人数)
-      for (const member of priorityMembers) {
-        for (let b = startBlock; b < Math.min(endBlock, TOTAL_BLOCKS); b++) {
-          if (memberAvailableBlocks[member.id]?.includes(b)) {
-            timeline[member.id][String(b)] = task.taskName;
-            memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== b);
-          }
-        }
-      }
+    // Speed-weighted target blocks per member
+    const defaultSpeed = (task.minutesPerUnit && task.minutesPerUnit > 0) ? task.minutesPerUnit : 1;
+    const weights = priorityMembers.map(m =>
+      1 / Math.max((m.speedRatings?.[task.taskName] || defaultSpeed), 0.1)
+    );
+    const totalWeight = weights.reduce((s, w) => s + w, 0) || 1;
+    const targets: number[] = priorityMembers.map((_, i) => {
+      if (i === priorityMembers.length - 1) return -1;
+      return Math.round((weights[i] / totalWeight) * blocksNeeded);
+    });
+    let allocSum = 0;
+    targets.forEach(t => { if (t >= 0) allocSum += t; });
+    if (targets.length > 0 && targets[targets.length - 1] === -1) {
+      targets[targets.length - 1] = Math.max(0, blocksNeeded - allocSum);
     }
-    if (priorityMembers.length > 0) scheduledTasksHandled.add(task.taskName);
+
+    // Place each member's share within the configured time ranges
+    priorityMembers.forEach((member, idx) => {
+      if (remaining <= 0) return;
+      let memberQuota = Math.min(targets[idx], remaining);
+      if (memberQuota <= 0) return;
+
+      for (const range of ranges) {
+        if (memberQuota <= 0) break;
+        const [startH, startM] = range.start.split(':').map(Number);
+        const [endH, endM] = range.end.split(':').map(Number);
+        const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
+        const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
+        if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
+
+        const inRangeAvail = (memberAvailableBlocks[member.id] || [])
+          .filter(b => b >= startBlock && b < Math.min(endBlock, TOTAL_BLOCKS));
+        const toAssign = Math.min(memberQuota, inRangeAvail.length);
+        for (let i = 0; i < toAssign; i++) {
+          timeline[member.id][String(inRangeAvail[i])] = task.taskName;
+          memberAvailableBlocks[member.id] = memberAvailableBlocks[member.id].filter(x => x !== inRangeAvail[i]);
+        }
+        memberQuota -= toAssign;
+        remaining -= toAssign;
+      }
+    });
+
+    blocksPlacedInStep2[task.taskName] = blocksNeeded - remaining;
   }
 
-  // ===== Step 3: Prepare remaining assignable tasks =====
+  // ===== Step 3: Prepare remaining assignable tasks (deduplicated by taskName, subtracting Step 2) =====
   const assignableTasks: AssignableTask[] = [];
+  const processedTaskNamesStep3 = new Set<string>();
 
   for (const task of tasks) {
     if (task.taskName === BREAK_TASK_NAME) continue;
-    if (scheduledTasksHandled.has(task.taskName)) continue;
+    if (processedTaskNamesStep3.has(task.taskName)) continue;
+    processedTaskNamesStep3.add(task.taskName);
 
-    const blocksNeeded = Math.max(1, Math.ceil(task.plannedMinutes / 15));
+    const totalPlannedMin = tasks
+      .filter(t => t.taskName === task.taskName)
+      .reduce((s, t) => s + t.plannedMinutes, 0);
+    const fullNeeded = Math.max(1, Math.ceil(totalPlannedMin / 15));
+    const alreadyPlaced = blocksPlacedInStep2[task.taskName] || 0;
+    const remainingBlocks = fullNeeded - alreadyPlaced;
+    if (remainingBlocks <= 0) continue;
 
     assignableTasks.push({
       taskName: task.taskName,
-      blocksNeeded,
+      blocksNeeded: remainingBlocks,
       assigneeId: task.assigneeId,
-      priority: 0, // priority is encoded in member order, not per-task
+      priority: 0,
       minutesPerUnit: task.minutesPerUnit || 0,
     });
   }
