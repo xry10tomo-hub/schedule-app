@@ -366,7 +366,7 @@ export default function AutoAssignPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">AI自動割振</h1>
             <p className="text-sm text-gray-500 mt-1">
-              日次業務入力画面の予定入力（対応可能メンバー・実施時間）から、1日のタイムスケジュールを自動生成します
+              日次業務入力画面の予定入力（対応可能メンバー・実施時間・対応人数）から、1日のタイムスケジュールを自動生成します
             </p>
           </div>
           <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{date}</span>
@@ -375,9 +375,15 @@ export default function AutoAssignPage() {
         {/* Data source banner */}
         <div className="bg-purple-50 border-l-4 border-purple-400 rounded-lg px-4 py-3 text-sm text-purple-800">
           🔗 <strong>データ連携：</strong>
-          このページは <a href="/daily" className="underline font-semibold">日次業務入力画面</a> で設定した
-          「<strong>対応可能メンバー</strong>（選択順=優先順位）」と「<strong>実施時間</strong>」を直接読み込んで割振します。
-          設定変更は日次業務入力画面で行ってください（業務単位のグローバル設定なので、日付を変えても保持されます）。
+          このページは <a href="/daily" className="underline font-semibold">日次業務入力画面</a> で設定した以下の3要素を直接読み込んで割振します：
+          <ul className="mt-1 ml-4 list-disc">
+            <li><strong>対応可能メンバー</strong>（選択順=優先順位）— 誰が担当できるか</li>
+            <li><strong>実施時間</strong> — いつ実施するか（複数時間帯対応）</li>
+            <li><strong>対応人数</strong> — その日に何名で担当するか（上位N名のみに割当）</li>
+          </ul>
+          <p className="mt-1 text-xs text-purple-700">
+            ＋ <strong>シフト</strong>から出勤者を抽出。設定変更は日次業務入力画面で行ってください（業務単位のグローバル設定なので、日付を変えても保持されます）。
+          </p>
         </div>
 
         {/* Status cards */}
