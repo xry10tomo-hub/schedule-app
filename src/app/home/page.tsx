@@ -325,74 +325,76 @@ export default function HomePage() {
   }
 
   // ===== Browser notification for overdue tasks =====
-  const notifiedBlocksRef = useRef<Set<string>>(new Set());
-  const [overdueAlerts, setOverdueAlerts] = useState<{ blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
-  const [teamOverdueAlerts, setTeamOverdueAlerts] = useState<{ memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
-  const [toastVisible, setToastVisible] = useState(true); // on-screen overlay toast visibility
-  const [teamMissingAlerts, setTeamMissingAlerts] = useState<{ memberId: string; memberName: string; blockIndex: number; taskName: string; scheduledTime: string }[]>([]);
+  // === 18:00過ぎチェック専用アラート ===
+  // 対象業務: 【補助】返送、【売却】承諾確認・催促 (予定時刻 18:00、超過1分でアラート)
+  const EVENING_ALERT_TASKS = ['【補助】返送', '【売却】承諾確認・催促'];
+  const EVENING_ALERT_TIME = '18:00';
+  const EVENING_ALERT_THRESHOLD_MIN = 18 * 60 + 1; // 18:01
+  const notifiedEveningRef = useRef<Set<string>>(new Set());
+  const [eveningAlerts, setEveningAlerts] = useState<string[]>([]);
 
-  // Request desktop notification permission for own overdue alerts
+  // Request desktop notification permission
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
 
-
-  const checkOverdue = useCallback(() => {
+  const checkEveningAlerts = useCallback(() => {
     const now = new Date();
-    const todayStr = now.toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const todayStr = now.toLocaleDateString('en-CA');
     if (selectedDate !== todayStr) {
-      setOverdueAlerts([]);
-      setTeamOverdueAlerts([]);
+      setEveningAlerts([]);
       return;
     }
-
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
-
-    // === Own alerts (on-screen banner only, no desktop notification) ===
-    const planned = timelineData[currentUserId] || {};
-    const actual = actualTimelineData[currentUserId] || {};
-    const alerts: { blockIndex: number; taskName: string; scheduledTime: string }[] = [];
-
-    for (const [blockStr, taskName] of Object.entries(planned)) {
-      const blockIndex = Number(blockStr);
-      const blockEndMinutes = TIMELINE_START * 60 + (blockIndex + 1) * 15;
-      if (currentMinutes >= blockEndMinutes + 30 && !actual[blockStr]) {
-        const scheduledTime = blockToTime(blockIndex);
-        alerts.push({ blockIndex, taskName, scheduledTime });
-
-        // New alert detected → desktop notification (own only) + on-screen banner
-        const notifKey = `${selectedDate}-own-${blockStr}`;
-        if (!notifiedBlocksRef.current.has(notifKey)) {
-          notifiedBlocksRef.current.add(notifKey);
-          setToastVisible(true);
-          // Desktop notification for OWN overdue (PC corner alert)
-          if ('Notification' in window && Notification.permission === 'granted') {
-            const memberName = currentMember?.name || '';
-            new Notification('⚠️ 業務遅延アラート', {
-              body: `${memberName}さん：「${taskName}」が予定時刻（${scheduledTime}）を30分超過しています。実績を入力してください。`,
-              icon: '/favicon.ico',
-              tag: notifKey,
-              requireInteraction: true,
-              silent: true,
-            });
-          }
+    if (currentMinutes < EVENING_ALERT_THRESHOLD_MIN) {
+      setEveningAlerts([]);
+      return;
+    }
+    // Check each target task: any DailyTask for today with this name that has no completion signal?
+    const pending: string[] = [];
+    for (const taskName of EVENING_ALERT_TASKS) {
+      const rows = tasks.filter(t => t.taskName === taskName);
+      if (rows.length === 0) continue; // task isn't planned today, skip
+      // Aggregate completion across all rows of this task name
+      const totalPlannedCount = rows.reduce((s, t) => s + (t.plannedCount || 0), 0);
+      // Get actual count from team performance entries
+      let totalActualCount = 0;
+      Object.values(performanceData || {}).forEach(memberPerf => {
+        const entry = memberPerf?.[taskName];
+        if (entry) totalActualCount += entry.count || 0;
+      });
+      // Also check DailyTask.actualCount fallback
+      const dailyActual = rows.reduce((s, t) => s + (t.actualCount || 0), 0);
+      const someoneCompleted = rows.some(t => t.status === 'completed');
+      const done = someoneCompleted || totalActualCount > 0 || dailyActual > 0;
+      if (!done && totalPlannedCount > 0) pending.push(taskName);
+      else if (!done && rows.length > 0) pending.push(taskName); // safety: still alert if planned exists
+    }
+    setEveningAlerts(pending);
+    // Trigger desktop notification once per task per day
+    for (const taskName of pending) {
+      const notifKey = `${selectedDate}-evening-${taskName}`;
+      if (!notifiedEveningRef.current.has(notifKey)) {
+        notifiedEveningRef.current.add(notifKey);
+        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+          new Notification('⏰ 18時超過アラート', {
+            body: `「${taskName}」が予定時刻（${EVENING_ALERT_TIME}）を過ぎています。完了確認をお願いします。`,
+            icon: '/favicon.ico',
+            tag: notifKey,
+            requireInteraction: true,
+          });
         }
       }
     }
-    setOverdueAlerts(alerts);
-    // Team / missing alerts are disabled per user request
-    setTeamOverdueAlerts([]);
-    setTeamMissingAlerts([]);
-  }, [selectedDate, timelineData, actualTimelineData, currentUserId, currentMember]);
+  }, [selectedDate, tasks, performanceData, EVENING_ALERT_TASKS, EVENING_ALERT_THRESHOLD_MIN]);
 
-  // Check every 60 seconds
   useEffect(() => {
-    checkOverdue();
-    const interval = setInterval(checkOverdue, 60_000);
+    checkEveningAlerts();
+    const interval = setInterval(checkEveningAlerts, 60_000); // re-check every minute
     return () => clearInterval(interval);
-  }, [checkOverdue]);
+  }, [checkEveningAlerts]);
 
   // Active members (with shifts)
   const activeMembers = useMemo(() => {
@@ -422,33 +424,24 @@ export default function HomePage() {
 
   return (
     <DashboardLayout>
-      {/* Fixed-position overdue alert overlay (always visible on screen) */}
-      {overdueAlerts.length > 0 && toastVisible && (
-        <div className="fixed top-4 right-4 z-[9999] max-w-md w-[92vw] sm:w-auto animate-fade-in space-y-2">
-          {/* Own alerts */}
-          {overdueAlerts.length > 0 && (
-            <div className="bg-red-600 text-white rounded-xl shadow-2xl border-2 border-red-800 p-4">
-              <div className="flex items-start justify-between gap-3 mb-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-2xl animate-pulse">⚠️</span>
-                  <h3 className="text-sm font-extrabold">自分の業務遅延（{overdueAlerts.length}件）</h3>
-                </div>
-                <button
-                  onClick={() => setToastVisible(false)}
-                  className="text-white/80 hover:text-white text-lg leading-none"
-                  title="閉じる"
-                >✕</button>
-              </div>
-              <div className="space-y-1.5 max-h-[30vh] overflow-y-auto">
-                {overdueAlerts.map(a => (
-                  <div key={a.blockIndex} className="flex items-start gap-2 text-xs bg-red-700/50 rounded px-2 py-1.5">
-                    <span className="w-1.5 h-1.5 rounded-full bg-white flex-shrink-0 mt-1" />
-                    <span>「{a.taskName}」— 予定 <strong>{a.scheduledTime}</strong> から30分以上超過。実績を入力してください。</span>
-                  </div>
-                ))}
-              </div>
+      {/* 18時超過アラート: 【補助】返送・【売却】承諾確認・催促 (全員のPCに表示) */}
+      {eveningAlerts.length > 0 && (
+        <div className="fixed top-4 right-4 z-[9999] max-w-md w-[92vw] sm:w-auto animate-fade-in">
+          <div className="bg-red-600 text-white rounded-xl shadow-2xl border-2 border-red-800 p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-2xl animate-pulse">⏰</span>
+              <h3 className="text-sm font-extrabold">18時超過アラート（{eveningAlerts.length}件）</h3>
             </div>
-          )}
+            <p className="text-[10px] text-red-100 mb-2">予定時刻 {EVENING_ALERT_TIME} を 1分以上 超過しています。完了確認をしてください。</p>
+            <div className="space-y-1.5">
+              {eveningAlerts.map(taskName => (
+                <div key={taskName} className="flex items-center gap-2 text-xs bg-red-700/50 rounded px-2 py-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white flex-shrink-0" />
+                  <strong>{taskName}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
@@ -478,24 +471,6 @@ export default function HomePage() {
             </span>
           </div>
         </div>
-
-        {/* Own Overdue Alerts Banner */}
-        {overdueAlerts.length > 0 && (
-          <div className="bg-red-50 border border-red-300 rounded-xl p-4 animate-fade-in">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-red-600 text-lg">⚠️</span>
-              <h3 className="text-sm font-bold text-red-700">業務遅延アラート（{overdueAlerts.length}件）</h3>
-            </div>
-            <div className="space-y-1">
-              {overdueAlerts.map(a => (
-                <div key={a.blockIndex} className="flex items-center gap-2 text-sm text-red-700">
-                  <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0" />
-                  <span>「{a.taskName}」— 予定 {a.scheduledTime} から30分以上超過。実績を入力してください。</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
 
         {/* Stats Grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -723,6 +698,57 @@ export default function HomePage() {
             <p className="text-[10px] text-gray-400 mt-2">※ 編集は「共有BOX」画面から行ってください</p>
           </div>
         )}
+
+        {/* ===== Today's Target (prominent: 計算書作成 + 画像査定) ===== */}
+        {(() => {
+          const TARGET_TASKS = ['【査定】計算書作成', '【LINE】画像査定'];
+          const targetEntries = TARGET_TASKS.map(taskName => {
+            const speed = getSpeedPerPoint(taskName);
+            // Sum minutes for this task from timeline + daily task fallback
+            const tlMins = myTimelineTasks[taskName] || 0;
+            const dailyMins = myDailyTasks
+              .filter(t => t.taskName === taskName)
+              .reduce((s, t) => s + (t.plannedMinutes || 0), 0);
+            const mins = tlMins > 0 ? tlMins : dailyMins;
+            const target = speed && mins > 0 ? Math.round((mins / speed) * 10) / 10 : null;
+            return { taskName, speed, mins, target };
+          }).filter(e => e.speed != null || e.mins > 0);
+
+          if (targetEntries.length === 0) return null;
+
+          return (
+            <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl shadow-sm border-2 border-amber-300 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xl">🎯</span>
+                <h3 className="text-base font-bold text-amber-900">本日の目標（{currentMember?.name || ''}）</h3>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {targetEntries.map(e => (
+                  <div key={e.taskName} className="bg-white rounded-lg p-4 border border-amber-200 shadow-sm">
+                    <p className="text-xs font-bold text-amber-700 mb-1">{e.taskName}</p>
+                    {e.speed != null ? (
+                      <div className="flex items-baseline gap-3">
+                        <div className="flex-1">
+                          <p className="text-[10px] text-gray-500">スピード設定</p>
+                          <p className="text-xl font-extrabold text-orange-600">{e.speed}<span className="text-xs font-normal text-gray-500">分/点</span></p>
+                        </div>
+                        {e.target != null && e.target > 0 && (
+                          <div className="flex-1 text-right">
+                            <p className="text-[10px] text-gray-500">本日の目標</p>
+                            <p className="text-3xl font-extrabold text-purple-700">{e.target}<span className="text-sm font-normal text-gray-500"> 点</span></p>
+                            <p className="text-[9px] text-gray-400">({e.mins}分の予定)</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-gray-500">速度未設定 — 日次入力のピッカーで「分/点」を入力してください</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ===== My Timeline ===== */}
         <div className="bg-white rounded-xl shadow-sm border border-green-200 p-6">
