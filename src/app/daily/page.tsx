@@ -50,6 +50,7 @@ export default function DailyPage() {
   const [showForm, setShowForm] = useState(false);
   const [taskDefs, setTaskDefsState] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [viewTab, setViewTab] = useState<'plan' | 'actual' | 'review'>('plan');
+  const [showGap, setShowGap] = useState(false);
 
   // Timeline state
   const [timelineData, setTimelineDataState] = useState<Record<string, Record<string, string>>>({});
@@ -1739,8 +1740,15 @@ export default function DailyPage() {
           {/* GAP: Daily task planned minutes vs Timeline total minutes */}
           {tasks.length > 0 && (
             <div className="mt-4 pt-3 border-t border-gray-100">
-              <h4 className="text-xs font-semibold text-gray-500 mb-2">📊 予定 vs タイムライン GAP</h4>
-              <div className="overflow-x-auto">
+              <button
+                onClick={() => setShowGap(v => !v)}
+                className="w-full flex items-center justify-between px-2 py-1.5 bg-gray-50 hover:bg-gray-100 rounded text-xs font-semibold text-gray-600 transition-colors"
+              >
+                <span>📊 予定 vs タイムライン GAP</span>
+                <span className="text-gray-400">{showGap ? '▲ 閉じる' : '▼ 表示'}</span>
+              </button>
+              {showGap && (
+              <div className="overflow-x-auto mt-2">
                 <table className="w-full text-[11px]">
                   <thead>
                     <tr className="text-left text-gray-500">
@@ -1814,6 +1822,7 @@ export default function DailyPage() {
                   </tbody>
                 </table>
               </div>
+              )}
             </div>
           )}
 

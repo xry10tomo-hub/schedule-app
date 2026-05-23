@@ -259,6 +259,21 @@ export function setTaskAssignments(data: Record<string, TaskAssignmentConfig>) {
   setToStorage('schedule_task_assignments', data);
 }
 
+// ============ No-break members (per-date) ============
+// Stores which members skip the 11:30-13:30 break on a given date. Used by auto-assign.
+export function getNoBreakMembersAll(): Record<string, string[]> {
+  return getFromStorage<Record<string, string[]>>(STORAGE_KEYS.noBreakMembers, {});
+}
+export function getNoBreakMembersForDate(date: string): string[] {
+  return getNoBreakMembersAll()[date] || [];
+}
+export function setNoBreakMembersForDate(date: string, memberIds: string[]) {
+  const all = getNoBreakMembersAll();
+  if (memberIds.length === 0) delete all[date];
+  else all[date] = memberIds;
+  setToStorage(STORAGE_KEYS.noBreakMembers, all);
+}
+
 // ============ Default Task Resources (1点あたりのリソース) ============
 export const DEFAULT_TASK_RESOURCES: TaskResource[] = [
   { taskName: '【LINE】画像査定', minutesPerPoint: 5 },
@@ -307,6 +322,7 @@ export const STORAGE_KEYS = {
   fixedTaskDefaults: 'schedule_fixed_task_defaults',
   taskAssignments: 'schedule_task_assignments',
   memberTasks: 'schedule_member_tasks',
+  noBreakMembers: 'schedule_no_break_members', // date → memberId[]: members who skip break on a given day
 } as const;
 
 // Keys to sync with Firestore (currentUser is per-device, not synced)
@@ -326,6 +342,7 @@ export const SYNC_KEYS: Set<string> = new Set([
   STORAGE_KEYS.fixedTaskDefaults,
   STORAGE_KEYS.taskAssignments,
   STORAGE_KEYS.memberTasks,
+  STORAGE_KEYS.noBreakMembers,
 ]);
 
 function getFromStorage<T>(key: string, defaultValue: T): T {

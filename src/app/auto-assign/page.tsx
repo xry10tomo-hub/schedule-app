@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, DEFAULT_TASKS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getShifts, getTimelineForDate, setTimelineForDate, getCategoryTaskColor, getTaskAssignments, getNoBreakMembersForDate, setNoBreakMembersForDate, DEFAULT_TASKS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
 import type { DailyTask, Member, ShiftEntry } from '@/lib/types';
 
 // ===== Timeline Constants =====
@@ -44,7 +44,8 @@ interface AssignableTask {
 function runAutoAssignAlgorithm(
   tasks: DailyTask[],
   activeMembers: Member[],
-  shifts: ShiftEntry[]
+  shifts: ShiftEntry[],
+  noBreakMemberIds: string[] = []
 ): Record<string, Record<string, string>> {
   // Result: { [memberId]: { [blockIndex]: taskName } }
   const timeline: Record<string, Record<string, string>> = {};
@@ -72,10 +73,12 @@ function runAutoAssignAlgorithm(
   // Stagger breaks within 11:30-13:30 window
   // Group 1: 11:30-12:30 (blocks 14-17)
   // Group 2: 12:30-13:30 (blocks 18-21)
+  // 休憩なしメンバー (noBreakMemberIds) はこの工程をスキップ → 12:45他の時間帯も業務に使える
   const membersWithShifts = activeMembers.filter(m => memberAvailableBlocks[m.id]?.length > 0);
-  const halfCount = Math.ceil(membersWithShifts.length / 2);
+  const breakEligible = membersWithShifts.filter(m => !noBreakMemberIds.includes(m.id));
+  const halfCount = Math.ceil(breakEligible.length / 2);
 
-  membersWithShifts.forEach((member, idx) => {
+  breakEligible.forEach((member, idx) => {
     const breakStartBlock = idx < halfCount
       ? BREAK_WINDOW_START_BLOCK // 11:30
       : BREAK_WINDOW_START_BLOCK + BREAK_DURATION_BLOCKS; // 12:30
@@ -187,11 +190,12 @@ function runAutoAssignAlgorithm(
       .filter((m): m is Member => !!m && m.id !== task.assigneeId);
     // 対応人数: cap the candidate list to top N in priority order
     const N = cfg?.assigneeCount && cfg.assigneeCount > 0 ? cfg.assigneeCount : allCapable.length;
-    // If task.assigneeId is already pre-set as 1 person, count that toward N
     const effectiveN = task.assigneeId ? Math.max(0, N - 1) : N;
-    const capableMembers = allCapable.slice(0, effectiveN);
+    const topNCapable = allCapable.slice(0, effectiveN);
+    const overflowCapable = allCapable.slice(effectiveN); // beyond N — used in pass 2 if still GAP
 
-    for (const member of capableMembers) {
+    // ===== Pass 1: distribute remaining work across top N members in priority order =====
+    for (const member of topNCapable) {
       if (remaining <= 0) break;
       const available = memberAvailableBlocks[member.id] || [];
       if (available.length === 0) continue;
@@ -204,8 +208,24 @@ function runAutoAssignAlgorithm(
       remaining -= toAssign;
     }
 
-    // Fallback to least-loaded ANY member — ONLY when 対応人数 is not explicitly set.
-    // If the user specified assigneeCount, respect it strictly: leave remainder unassigned (warning will surface).
+    // ===== Pass 2: if still remaining, expand to OTHER assignable members beyond top N =====
+    // (Better to use someone who can do this task — even if "over" 対応人数 — than to leave GAP.)
+    if (remaining > 0) {
+      for (const member of overflowCapable) {
+        if (remaining <= 0) break;
+        const available = memberAvailableBlocks[member.id] || [];
+        if (available.length === 0) continue;
+        const toAssign = Math.min(remaining, available.length);
+        for (let i = 0; i < toAssign; i++) {
+          timeline[member.id][String(available[i])] = task.taskName;
+        }
+        memberAvailableBlocks[member.id] = available.slice(toAssign);
+        remaining -= toAssign;
+      }
+    }
+
+    // ===== Pass 3: ONLY if assigneeCount was NOT set, fall back to least-loaded ANY member =====
+    // (When assigneeCount is set, do NOT cross over to non-assignable members to keep config strict.)
     const strictCount = cfg?.assigneeCount && cfg.assigneeCount > 0;
     if (remaining > 0 && !strictCount) {
       const sortedByLoad = [...membersWithShifts].sort((a, b) =>
@@ -213,6 +233,8 @@ function runAutoAssignAlgorithm(
       );
       for (const member of sortedByLoad) {
         if (remaining <= 0) break;
+        // Skip members already considered as capable
+        if (allCapable.find(c => c.id === member.id)) continue;
         const available = memberAvailableBlocks[member.id] || [];
         if (available.length === 0) continue;
         const toAssign = Math.min(remaining, available.length);
@@ -235,6 +257,7 @@ export default function AutoAssignPage() {
   const [tasks, setTasksState] = useState<DailyTask[]>([]);
   const [applied, setApplied] = useState(false);
   const [unassignedWarnings, setUnassignedWarnings] = useState<string[]>([]);
+  const [noBreakIds, setNoBreakIdsState] = useState<string[]>([]);
 
   // Load daily tasks for selected date
   useEffect(() => {
@@ -243,7 +266,14 @@ export default function AutoAssignPage() {
     setPreviewTimeline(null);
     setApplied(false);
     setUnassignedWarnings([]);
+    setNoBreakIdsState(getNoBreakMembersForDate(date));
   }, [date, dataVersion]);
+
+  function toggleNoBreak(memberId: string) {
+    const next = noBreakIds.includes(memberId) ? noBreakIds.filter(id => id !== memberId) : [...noBreakIds, memberId];
+    setNoBreakIdsState(next);
+    setNoBreakMembersForDate(date, next);
+  }
 
   const shiftsForDate = getShifts().filter(s => s.date === date);
   const activeMembers = useMemo(() => {
@@ -277,7 +307,7 @@ export default function AutoAssignPage() {
       return;
     }
 
-    const result = runAutoAssignAlgorithm(tasks, activeMembers, shiftsForDate);
+    const result = runAutoAssignAlgorithm(tasks, activeMembers, shiftsForDate, noBreakIds);
     setPreviewTimeline(result);
     setApplied(false);
 
@@ -384,6 +414,69 @@ export default function AutoAssignPage() {
           <p className="mt-1 text-xs text-purple-700">
             ＋ <strong>シフト</strong>から出勤者を抽出。設定変更は日次業務入力画面で行ってください（業務単位のグローバル設定なので、日付を変えても保持されます）。
           </p>
+        </div>
+
+        {/* How it works (moved to top per request) */}
+        <div className="bg-gray-50 rounded-xl border border-gray-200 p-6">
+          <h3 className="text-sm font-bold text-gray-700 mb-3">⚙️ AI自動割振の仕組み</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-gray-600">
+            <div className="space-y-2">
+              <p><span className="font-bold text-green-700">1.</span> シフト登録済みメンバーの出勤時間を確認</p>
+              <p><span className="font-bold text-green-700">2.</span> 全員に休憩を割当（11:30〜13:30の間に1時間）<span className="text-amber-700">※下の「休憩なしメンバー」で除外可能</span></p>
+              <p><span className="font-bold text-green-700">3.</span> 日次業務入力で「実施時間」が設定されたタスクを指定時間に固定配置</p>
+              <p><span className="font-bold text-green-700">4.</span> 「対応可能メンバー」の選択順を優先順位として割振</p>
+            </div>
+            <div className="space-y-2">
+              <p><span className="font-bold text-green-700">5.</span> 各タスクの必要時間（必要件数 × 1回あたり時間）に応じて割当</p>
+              <p><span className="font-bold text-green-700">6.</span> 「対応人数」で上位N名に絞って分担。GAPが残る場合は対応可能メンバー全員に拡大</p>
+              <p><span className="font-bold text-green-700">7.</span> 対応可能メンバーがいない/空きがない場合は割当不可として残ります</p>
+            </div>
+          </div>
+
+          {/* 条件設定: 休憩なしメンバー */}
+          <div className="mt-4 p-3 bg-amber-50 rounded-lg border border-amber-200">
+            <p className="text-xs font-bold text-amber-900 mb-2">🚫 条件設定: 休憩なしメンバー（本日のみ）</p>
+            <p className="text-[11px] text-amber-700 mb-2">
+              チェックを入れたメンバーは 11:30〜13:30 の休憩割当を <strong>スキップ</strong> し、その時間帯も業務に使えます。
+              （例：佐藤にチェック → 12:45〜の業務に佐藤を投入可能）
+            </p>
+            {activeMembers.length === 0 ? (
+              <p className="text-[11px] text-gray-500">出勤メンバーがいません</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {activeMembers.map(m => {
+                  const isNoBreak = noBreakIds.includes(m.id);
+                  return (
+                    <label
+                      key={m.id}
+                      className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs cursor-pointer border transition-colors ${
+                        isNoBreak
+                          ? 'bg-amber-200 text-amber-900 border-amber-400 font-bold'
+                          : 'bg-white text-gray-600 border-gray-300 hover:bg-amber-50'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isNoBreak}
+                        onChange={() => toggleNoBreak(m.id)}
+                        className="accent-amber-600"
+                      />
+                      {m.name}
+                    </label>
+                  );
+                })}
+              </div>
+            )}
+            {noBreakIds.length > 0 && (
+              <p className="text-[11px] text-amber-800 mt-2">
+                <strong>{noBreakIds.length}名</strong>が休憩スキップ → 12:45他の時間帯も業務割当の対象になります
+              </p>
+            )}
+          </div>
+
+          <div className="mt-3 p-3 bg-yellow-50 rounded-lg text-xs text-yellow-700">
+            <strong>ヒント：</strong>精度を上げるには<strong>「日次業務入力」画面の予定入力</strong>で各業務の<strong>対応可能メンバー</strong>（選択順 = 優先順位）と<strong>実施時間</strong>を設定してください。
+          </div>
         </div>
 
         {/* Status cards */}
@@ -684,26 +777,6 @@ export default function AutoAssignPage() {
           </div>
         )}
 
-        {/* How it works */}
-        <div className="bg-gray-50 rounded-xl border border-gray-200 p-6">
-          <h3 className="text-sm font-bold text-gray-700 mb-3">AI自動割振の仕組み</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs text-gray-600">
-            <div className="space-y-2">
-              <p><span className="font-bold text-green-700">1.</span> シフト登録済みメンバーの出勤時間を確認</p>
-              <p><span className="font-bold text-green-700">2.</span> 全員に休憩を割当（11:30〜13:30の間に1時間）</p>
-              <p><span className="font-bold text-green-700">3.</span> 日次業務入力で「実施時間」が設定されたタスクを指定時間に固定配置</p>
-              <p><span className="font-bold text-green-700">4.</span> 「対応可能メンバー」の選択順を優先順位として割振</p>
-            </div>
-            <div className="space-y-2">
-              <p><span className="font-bold text-green-700">5.</span> 各タスクの必要時間（必要件数 × 1回あたり時間）に応じて割当</p>
-              <p><span className="font-bold text-green-700">6.</span> 同じ優先順位（同列）の場合、空き時間が多いメンバーに割当</p>
-              <p><span className="font-bold text-green-700">7.</span> 対応可能メンバーがいない/空きがない場合は割当不可として残ります</p>
-            </div>
-          </div>
-          <div className="mt-3 p-3 bg-yellow-50 rounded-lg text-xs text-yellow-700">
-            <strong>ヒント：</strong>精度を上げるには<strong>「日次業務入力」画面の予定入力</strong>で各業務の<strong>対応可能メンバー</strong>（選択順 = 優先順位）と<strong>実施時間</strong>を設定してください。
-          </div>
-        </div>
       </div>
     </DashboardLayout>
   );
