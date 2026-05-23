@@ -325,76 +325,67 @@ export default function HomePage() {
   }
 
   // ===== Browser notification for overdue tasks =====
-  // === 18:00過ぎチェック専用アラート ===
-  // 対象業務: 【補助】返送 (予定時刻 18:00、超過1分でアラート)
-  const EVENING_ALERT_TASKS = ['【補助】返送'];
-  const EVENING_ALERT_TIME = '18:00';
-  const EVENING_ALERT_THRESHOLD_MIN = 18 * 60 + 1; // 18:01
+  // === 18:00過ぎチェック専用アラート（【補助】返送） ===
   const notifiedEveningRef = useRef<Set<string>>(new Set());
   const [eveningAlerts, setEveningAlerts] = useState<string[]>([]);
 
-  // Request desktop notification permission
+  // Request desktop notification permission once
   useEffect(() => {
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
   }, []);
 
-  const checkEveningAlerts = useCallback(() => {
-    const now = new Date();
-    const todayStr = now.toLocaleDateString('en-CA');
-    if (selectedDate !== todayStr) {
-      setEveningAlerts([]);
-      return;
-    }
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    if (currentMinutes < EVENING_ALERT_THRESHOLD_MIN) {
-      setEveningAlerts([]);
-      return;
-    }
-    // Check each target task: any DailyTask for today with this name that has no completion signal?
-    const pending: string[] = [];
-    for (const taskName of EVENING_ALERT_TASKS) {
-      const rows = tasks.filter(t => t.taskName === taskName);
-      if (rows.length === 0) continue; // task isn't planned today, skip
-      // Aggregate completion across all rows of this task name
-      const totalPlannedCount = rows.reduce((s, t) => s + (t.plannedCount || 0), 0);
-      // Get actual count from team performance entries
-      let totalActualCount = 0;
-      Object.values(performanceData || {}).forEach(memberPerf => {
-        const entry = memberPerf?.[taskName];
-        if (entry) totalActualCount += entry.count || 0;
-      });
-      // Also check DailyTask.actualCount fallback
-      const dailyActual = rows.reduce((s, t) => s + (t.actualCount || 0), 0);
-      const someoneCompleted = rows.some(t => t.status === 'completed');
-      const done = someoneCompleted || totalActualCount > 0 || dailyActual > 0;
-      if (!done && totalPlannedCount > 0) pending.push(taskName);
-      else if (!done && rows.length > 0) pending.push(taskName); // safety: still alert if planned exists
-    }
-    setEveningAlerts(pending);
-    // Trigger desktop notification once per task per day
-    for (const taskName of pending) {
-      const notifKey = `${selectedDate}-evening-${taskName}`;
-      if (!notifiedEveningRef.current.has(notifKey)) {
-        notifiedEveningRef.current.add(notifKey);
-        if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-          new Notification('⏰ 18時超過アラート', {
-            body: `「${taskName}」が予定時刻（${EVENING_ALERT_TIME}）を過ぎています。完了確認をお願いします。`,
-            icon: '/favicon.ico',
-            tag: notifKey,
-            requireInteraction: true,
-          });
+  // Single useEffect: periodically check evening alerts. No useCallback to avoid dep-array churn.
+  useEffect(() => {
+    const TARGETS = ['【補助】返送'];
+    const THRESHOLD_MIN = 18 * 60 + 1; // 18:01
+
+    function check() {
+      const now = new Date();
+      const todayStr = now.toLocaleDateString('en-CA');
+      if (selectedDate !== todayStr) { setEveningAlerts([]); return; }
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      if (currentMinutes < THRESHOLD_MIN) { setEveningAlerts([]); return; }
+
+      const pending: string[] = [];
+      for (const taskName of TARGETS) {
+        const rows = tasks.filter(t => t.taskName === taskName);
+        if (rows.length === 0) continue;
+        let totalActualCount = 0;
+        Object.values(performanceData || {}).forEach(memberPerf => {
+          const entry = memberPerf?.[taskName];
+          if (entry) totalActualCount += entry.count || 0;
+        });
+        const dailyActual = rows.reduce((s, t) => s + (t.actualCount || 0), 0);
+        const someoneCompleted = rows.some(t => t.status === 'completed');
+        if (!(someoneCompleted || totalActualCount > 0 || dailyActual > 0)) {
+          pending.push(taskName);
+        }
+      }
+      setEveningAlerts(pending);
+
+      // Desktop notification once per task per day
+      for (const taskName of pending) {
+        const notifKey = `${selectedDate}-evening-${taskName}`;
+        if (!notifiedEveningRef.current.has(notifKey)) {
+          notifiedEveningRef.current.add(notifKey);
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            new Notification('⏰ 18時超過アラート', {
+              body: `「${taskName}」が予定時刻（18:00）を過ぎています。完了確認をお願いします。`,
+              icon: '/favicon.ico',
+              tag: notifKey,
+              requireInteraction: true,
+            });
+          }
         }
       }
     }
-  }, [selectedDate, tasks, performanceData, EVENING_ALERT_TASKS, EVENING_ALERT_THRESHOLD_MIN]);
 
-  useEffect(() => {
-    checkEveningAlerts();
-    const interval = setInterval(checkEveningAlerts, 60_000); // re-check every minute
+    check();
+    const interval = setInterval(check, 60_000);
     return () => clearInterval(interval);
-  }, [checkEveningAlerts]);
+  }, [selectedDate, tasks, performanceData]);
 
   // Active members (with shifts)
   const activeMembers = useMemo(() => {
@@ -432,7 +423,7 @@ export default function HomePage() {
               <span className="text-2xl animate-pulse">⏰</span>
               <h3 className="text-sm font-extrabold">18時超過アラート（{eveningAlerts.length}件）</h3>
             </div>
-            <p className="text-[10px] text-red-100 mb-2">予定時刻 {EVENING_ALERT_TIME} を 1分以上 超過しています。完了確認をしてください。</p>
+            <p className="text-[10px] text-red-100 mb-2">予定時刻 18:00 を 1分以上 超過しています。完了確認をしてください。</p>
             <div className="space-y-1.5">
               {eveningAlerts.map(taskName => (
                 <div key={taskName} className="flex items-center gap-2 text-xs bg-red-700/50 rounded px-2 py-1.5">
