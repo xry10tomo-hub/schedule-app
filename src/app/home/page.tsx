@@ -326,8 +326,8 @@ export default function HomePage() {
 
   // ===== Browser notification for overdue tasks =====
   // === 18:00過ぎチェック専用アラート ===
-  // 対象業務: 【補助】返送、【売却】承諾確認・催促 (予定時刻 18:00、超過1分でアラート)
-  const EVENING_ALERT_TASKS = ['【補助】返送', '【売却】承諾確認・催促'];
+  // 対象業務: 【補助】返送 (予定時刻 18:00、超過1分でアラート)
+  const EVENING_ALERT_TASKS = ['【補助】返送'];
   const EVENING_ALERT_TIME = '18:00';
   const EVENING_ALERT_THRESHOLD_MIN = 18 * 60 + 1; // 18:01
   const notifiedEveningRef = useRef<Set<string>>(new Set());
