@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, getCategoryTaskColor, CATEGORY_COLORS, TASK_CATEGORIES, getFixedTasks, getFixedTaskDefaults, getTaskAssignments, setTaskAssignments, DEFAULT_TASKS, fmtNum } from '@/lib/store';
+import { useAppContext, getDailyTasks, setDailyTasks, getTaskDefinitions, getMonthlySchedules, getHandovers, getShifts, generateId, exportToCSV, getMemberById, getMembers, setMembers, getTimelineForDate, setTimelineForDate, getActualTimelineForDate, getActualPerformanceForDate, getCategoryTaskColor, CATEGORY_COLORS, TASK_CATEGORIES, getFixedTasks, getFixedTaskDefaults, getTaskAssignments, setTaskAssignments, DEFAULT_TASKS, fmtNum } from '@/lib/store';
 import NumberInput from '@/components/NumberInput';
 import type { TaskAssignmentConfig } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
@@ -45,7 +45,7 @@ function isBlockInShift(blockIndex: number, shift: ShiftEntry | undefined): bool
 }
 
 export default function DailyPage() {
-  const { members, currentUserId, dataVersion, selectedDate, setSelectedDate } = useAppContext();
+  const { members, currentUserId, dataVersion, selectedDate, setSelectedDate, refreshMembers } = useAppContext();
   const [tasks, setTasksState] = useState<DailyTask[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [taskDefs, setTaskDefsState] = useState<TaskDefinition[]>(DEFAULT_TASKS);
@@ -416,6 +416,25 @@ export default function DailyPage() {
   // Count of assignable members for a task (used in 対応人数 column for warnings)
   function assignableCount(taskName: string): number {
     return (getAssignment(taskName).assignableMemberIds || []).length;
+  }
+  // Tasks where speed is measured per-point (rather than per-count)
+  const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
+  function speedUnitLabel(taskName: string): string {
+    return POINTS_BASED_SPEED_TASKS.includes(taskName) ? '分/点' : '分/件';
+  }
+  // Update a single member's speedRating for a given task. Auto-adds task to skills.
+  function updateMemberSpeed(memberId: string, taskName: string, value: number) {
+    const all = getMembers();
+    const updated = all.map(m => {
+      if (m.id !== memberId) return m;
+      const newSpeeds = { ...(m.speedRatings || {}) };
+      if (value > 0) newSpeeds[taskName] = parseFloat(value.toFixed(1));
+      else delete newSpeeds[taskName];
+      const newSkills = m.skills.includes(taskName) ? m.skills : [...m.skills, taskName];
+      return { ...m, speedRatings: newSpeeds, skills: newSkills };
+    });
+    setMembers(updated);
+    refreshMembers();
   }
   // Update assignment config (global, persists across days)
   function updateAssignment(taskName: string, patch: Partial<TaskAssignmentConfig>) {
@@ -849,31 +868,66 @@ export default function DailyPage() {
                               <span className="ml-auto text-gray-400 text-[10px]">▼</span>
                             </button>
                             {isPickerOpen && (
-                              <div ref={memberPickerRef} className="absolute z-30 mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-2 min-w-[200px]">
+                              <div ref={memberPickerRef} className="absolute z-30 mt-1 left-0 bg-white border border-gray-200 rounded-lg shadow-lg p-2 min-w-[260px]">
+                                <p className="text-[9px] text-gray-500 mb-2 leading-tight">
+                                  チェック=対応可能。<strong>{speedUnitLabel(t.taskName)}</strong>欄を埋めると、自動割振でその速度に応じて配分されます（速い人ほど多く担当）。
+                                </p>
                                 <p className="text-[10px] font-bold text-gray-500 mb-1">社員</p>
-                                {members.filter(m => m.role === 'employee').map(m => (
-                                  <label key={m.id} className="flex items-center gap-2 px-1 py-0.5 text-xs hover:bg-gray-50 cursor-pointer">
-                                    <input
-                                      type="checkbox"
-                                      checked={assign.assignableMemberIds.includes(m.id)}
-                                      onChange={() => toggleMemberForTask(t.taskName, m.id)}
-                                      className="accent-green-600"
-                                    />
-                                    {m.name}
-                                  </label>
-                                ))}
+                                {members.filter(m => m.role === 'employee').map(m => {
+                                  const isChecked = assign.assignableMemberIds.includes(m.id);
+                                  const speed = m.speedRatings?.[t.taskName];
+                                  return (
+                                    <div key={m.id} className="flex items-center gap-1.5 px-1 py-0.5 text-xs hover:bg-gray-50 rounded">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => toggleMemberForTask(t.taskName, m.id)}
+                                        className="accent-green-600 cursor-pointer"
+                                        id={`pickch-${t.id}-${m.id}`}
+                                      />
+                                      <label htmlFor={`pickch-${t.id}-${m.id}`} className="flex-1 cursor-pointer">{m.name}</label>
+                                      <input
+                                        type="number"
+                                        step="0.1"
+                                        min={0}
+                                        value={speed ?? ''}
+                                        placeholder="-"
+                                        onChange={e => updateMemberSpeed(m.id, t.taskName, parseFloat(e.target.value) || 0)}
+                                        className="w-14 border border-gray-200 rounded px-1 py-0.5 text-[10px] text-right"
+                                        title={`${m.name}が1${POINTS_BASED_SPEED_TASKS.includes(t.taskName) ? '点' : '件'}にかかる分数`}
+                                      />
+                                      <span className="text-[9px] text-gray-400 w-9 flex-shrink-0">{speedUnitLabel(t.taskName)}</span>
+                                    </div>
+                                  );
+                                })}
                                 <p className="text-[10px] font-bold text-gray-500 mt-2 mb-1">アルバイト</p>
-                                {members.filter(m => m.role === 'parttime').map(m => (
-                                  <label key={m.id} className="flex items-center gap-2 px-1 py-0.5 text-xs hover:bg-gray-50 cursor-pointer">
-                                    <input
-                                      type="checkbox"
-                                      checked={assign.assignableMemberIds.includes(m.id)}
-                                      onChange={() => toggleMemberForTask(t.taskName, m.id)}
-                                      className="accent-blue-600"
-                                    />
-                                    {m.name}
-                                  </label>
-                                ))}
+                                {members.filter(m => m.role === 'parttime').map(m => {
+                                  const isChecked = assign.assignableMemberIds.includes(m.id);
+                                  const speed = m.speedRatings?.[t.taskName];
+                                  return (
+                                    <div key={m.id} className="flex items-center gap-1.5 px-1 py-0.5 text-xs hover:bg-gray-50 rounded">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => toggleMemberForTask(t.taskName, m.id)}
+                                        className="accent-blue-600 cursor-pointer"
+                                        id={`pickch-${t.id}-${m.id}`}
+                                      />
+                                      <label htmlFor={`pickch-${t.id}-${m.id}`} className="flex-1 cursor-pointer">{m.name}</label>
+                                      <input
+                                        type="number"
+                                        step="0.1"
+                                        min={0}
+                                        value={speed ?? ''}
+                                        placeholder="-"
+                                        onChange={e => updateMemberSpeed(m.id, t.taskName, parseFloat(e.target.value) || 0)}
+                                        className="w-14 border border-gray-200 rounded px-1 py-0.5 text-[10px] text-right"
+                                        title={`${m.name}が1${POINTS_BASED_SPEED_TASKS.includes(t.taskName) ? '点' : '件'}にかかる分数`}
+                                      />
+                                      <span className="text-[9px] text-gray-400 w-9 flex-shrink-0">{speedUnitLabel(t.taskName)}</span>
+                                    </div>
+                                  );
+                                })}
                               </div>
                             )}
                           </td>

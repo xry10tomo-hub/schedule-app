@@ -39,6 +39,7 @@ interface AssignableTask {
   blocksNeeded: number;
   assigneeId: string; // empty = unassigned
   priority: number; // lower = more important (derived from min priority across members)
+  minutesPerUnit: number; // default minutes-per-unit from DailyTask, used as fallback speed
 }
 
 function runAutoAssignAlgorithm(
@@ -155,6 +156,7 @@ function runAutoAssignAlgorithm(
       blocksNeeded,
       assigneeId: task.assigneeId,
       priority: 0, // priority is encoded in member order, not per-task
+      minutesPerUnit: task.minutesPerUnit || 0,
     });
   }
 
@@ -194,18 +196,40 @@ function runAutoAssignAlgorithm(
     const topNCapable = allCapable.slice(0, effectiveN);
     const overflowCapable = allCapable.slice(effectiveN); // beyond N — used in pass 2 if still GAP
 
-    // ===== Pass 1: distribute remaining work across top N members in priority order =====
-    for (const member of topNCapable) {
-      if (remaining <= 0) break;
-      const available = memberAvailableBlocks[member.id] || [];
-      if (available.length === 0) continue;
+    // ===== Pass 1: distribute work across top N capable members, weighted by speed =====
+    // 速度（speedRatings[taskName]: 1点/件あたり分）が設定されていれば、速い人ほど多く担当。
+    // 例: A=5分/点, B=10分/点 → A は B の倍の作業量を担当
+    if (topNCapable.length > 0 && remaining > 0) {
+      const defaultSpeed = (task.minutesPerUnit && task.minutesPerUnit > 0) ? task.minutesPerUnit : 1;
+      const weights = topNCapable.map(m => {
+        const s = m.speedRatings?.[task.taskName];
+        // Faster (smaller speed) = higher weight. If unset, fall back to task's default speed.
+        return 1 / Math.max((s && s > 0) ? s : defaultSpeed, 0.1);
+      });
+      const totalWeight = weights.reduce((sum, w) => sum + w, 0);
+      const totalRemaining = remaining;
+      // Compute target block share per member (round; last member soaks up rounding remainder)
+      const targets: number[] = topNCapable.map((_, idx) => {
+        if (idx === topNCapable.length - 1) return -1; // marker for last
+        return Math.round((weights[idx] / totalWeight) * totalRemaining);
+      });
+      // Last member gets whatever's left (so totals match)
+      let alloc = 0;
+      targets.forEach((t, i) => { if (t >= 0) alloc += t; });
+      if (targets.length > 0) targets[targets.length - 1] = Math.max(0, totalRemaining - alloc);
 
-      const toAssign = Math.min(remaining, available.length);
-      for (let i = 0; i < toAssign; i++) {
-        timeline[member.id][String(available[i])] = task.taskName;
-      }
-      memberAvailableBlocks[member.id] = available.slice(toAssign);
-      remaining -= toAssign;
+      topNCapable.forEach((member, idx) => {
+        if (remaining <= 0) return;
+        const available = memberAvailableBlocks[member.id] || [];
+        if (available.length === 0) return;
+        const want = targets[idx];
+        const toAssign = Math.min(want, available.length, remaining);
+        for (let i = 0; i < toAssign; i++) {
+          timeline[member.id][String(available[i])] = task.taskName;
+        }
+        memberAvailableBlocks[member.id] = available.slice(toAssign);
+        remaining -= toAssign;
+      });
     }
 
     // ===== Pass 2: if still remaining, expand to OTHER assignable members beyond top N =====
