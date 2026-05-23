@@ -412,6 +412,10 @@ export default function DailyPage() {
   function getAssignment(taskName: string): TaskAssignmentConfig {
     return taskAssignments[taskName] || { assignableMemberIds: [], scheduledStart: '', scheduledEnd: '', scheduledRanges: [] };
   }
+  // Count of assignable members for a task (used in 対応人数 column for warnings)
+  function assignableCount(taskName: string): number {
+    return (getAssignment(taskName).assignableMemberIds || []).length;
+  }
   // Update assignment config (global, persists across days)
   function updateAssignment(taskName: string, patch: Partial<TaskAssignmentConfig>) {
     const current = getAssignment(taskName);
@@ -796,12 +800,13 @@ export default function DailyPage() {
                     <th className="px-3 py-3 font-semibold">必要時間(分)</th>
                     <th className="px-3 py-3 font-semibold">対応可能メンバー</th>
                     <th className="px-3 py-3 font-semibold">実施時間</th>
+                    <th className="px-3 py-3 font-semibold text-purple-700" title="この業務を担当するメンバー人数（自動割振で使用）">対応人数</th>
                     <th className="px-3 py-3 font-semibold">操作</th>
                   </tr>
                 </thead>
                 <tbody>
                   {tasks.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-12 text-center text-gray-400">タスクがありません。「+ タスク追加」から追加してください。</td></tr>
+                    <tr><td colSpan={8} className="px-4 py-12 text-center text-gray-400">タスクがありません。「+ タスク追加」から追加してください。</td></tr>
                   ) : (
                     tasks.map(t => {
                       const isFromMonthly = t.comment === '月次予定から自動反映';
@@ -902,6 +907,26 @@ export default function DailyPage() {
                             </div>
                           </td>
                           <td className="px-3 py-3">
+                            <div className="flex items-center gap-1">
+                              <NumberInput
+                                value={assign.assigneeCount ?? 0}
+                                onChange={v => updateAssignment(t.taskName, { assigneeCount: v > 0 ? v : undefined })}
+                                className="w-14 border-2 border-purple-200 rounded px-2 py-1 text-sm text-center font-bold text-purple-700"
+                                min={0}
+                                max={members.length}
+                              />
+                              <span className="text-xs text-gray-500">名</span>
+                              {assign.assigneeCount != null && assign.assigneeCount > 0 && assignableCount(t.taskName) < assign.assigneeCount && (
+                                <span className="text-[10px] text-red-500" title="対応可能メンバーが対応人数より少ない">⚠</span>
+                              )}
+                            </div>
+                            <p className="text-[9px] text-gray-400 mt-0.5">
+                              {assign.assigneeCount == null || assign.assigneeCount === 0
+                                ? '指定なし=全員'
+                                : `${assignableCount(t.taskName)}名中${assign.assigneeCount}名`}
+                            </p>
+                          </td>
+                          <td className="px-3 py-3">
                             <button onClick={() => handleDeleteTask(t.id)} className="text-red-400 hover:text-red-600 text-xs">削除</button>
                           </td>
                         </tr>
@@ -914,6 +939,7 @@ export default function DailyPage() {
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3 text-orange-700">{fmtNum(totalRequiredMinutes)}分 ({(totalRequiredMinutes / 60).toFixed(1)}h)</td>
+                      <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>
                       <td className="px-3 py-3"></td>

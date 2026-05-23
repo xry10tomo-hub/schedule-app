@@ -111,9 +111,13 @@ function runAutoAssignAlgorithm(
     }
     if (ranges.length === 0) continue;
 
-    const priorityMembers = (cfg.assignableMemberIds || [])
+    const allCapable = (cfg.assignableMemberIds || [])
       .map(id => activeMembers.find(m => m.id === id))
       .filter(Boolean) as Member[];
+    // 対応人数 (assigneeCount): if set, limit to top-N members in priority order.
+    // 0 / undefined = no limit (use all assignable members).
+    const N = cfg.assigneeCount && cfg.assigneeCount > 0 ? cfg.assigneeCount : allCapable.length;
+    const priorityMembers = allCapable.slice(0, N);
 
     for (const range of ranges) {
       const [startH, startM] = range.start.split(':').map(Number);
@@ -121,7 +125,7 @@ function runAutoAssignAlgorithm(
       const startBlock = Math.floor(((startH * 60 + startM) - TIMELINE_START * 60) / 15);
       const endBlock = Math.floor(((endH * 60 + endM) - TIMELINE_START * 60) / 15);
       if (startBlock < 0 || endBlock <= startBlock || startBlock >= TOTAL_BLOCKS) continue;
-      // Place blocks for assignable members in priority order (selected order)
+      // Place blocks for assignable members in priority order (selected order, capped at 対応人数)
       for (const member of priorityMembers) {
         for (let b = startBlock; b < Math.min(endBlock, TOTAL_BLOCKS); b++) {
           if (memberAvailableBlocks[member.id]?.includes(b)) {
@@ -178,9 +182,14 @@ function runAutoAssignAlgorithm(
     // Find capable members from taskAssignments, ordered by selection (= priority)
     const cfg = taskAssignmentsCfg[task.taskName];
     const assignableIds = cfg?.assignableMemberIds || [];
-    const capableMembers = assignableIds
+    const allCapable = assignableIds
       .map(id => activeMembers.find(m => m.id === id))
       .filter((m): m is Member => !!m && m.id !== task.assigneeId);
+    // 対応人数: cap the candidate list to top N in priority order
+    const N = cfg?.assigneeCount && cfg.assigneeCount > 0 ? cfg.assigneeCount : allCapable.length;
+    // If task.assigneeId is already pre-set as 1 person, count that toward N
+    const effectiveN = task.assigneeId ? Math.max(0, N - 1) : N;
+    const capableMembers = allCapable.slice(0, effectiveN);
 
     for (const member of capableMembers) {
       if (remaining <= 0) break;
@@ -195,8 +204,10 @@ function runAutoAssignAlgorithm(
       remaining -= toAssign;
     }
 
-    // If still remaining and no capable members, assign to least loaded member
-    if (remaining > 0) {
+    // Fallback to least-loaded ANY member — ONLY when 対応人数 is not explicitly set.
+    // If the user specified assigneeCount, respect it strictly: leave remainder unassigned (warning will surface).
+    const strictCount = cfg?.assigneeCount && cfg.assigneeCount > 0;
+    if (remaining > 0 && !strictCount) {
       const sortedByLoad = [...membersWithShifts].sort((a, b) =>
         (memberAvailableBlocks[b.id]?.length || 0) - (memberAvailableBlocks[a.id]?.length || 0)
       );

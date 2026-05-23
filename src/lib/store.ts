@@ -237,6 +237,7 @@ export type TaskAssignmentConfig = {
   scheduledStart: string; // legacy
   scheduledEnd: string;   // legacy
   scheduledRanges?: ScheduledRange[]; // multiple time slots
+  assigneeCount?: number; // 対応人数: how many members should handle this task (0/undefined = all assignable)
 };
 export function getTaskAssignments(): Record<string, TaskAssignmentConfig> {
   const raw = getFromStorage<Record<string, TaskAssignmentConfig>>('schedule_task_assignments', {});
