@@ -436,6 +436,12 @@ function debouncedFirestoreSync(key: string, value: unknown) {
   }, 200));
 }
 
+// Allow AppProvider to check whether a local edit is awaiting Firestore sync.
+// Used to avoid clobbering pending local writes with stale remote snapshots.
+export function hasPendingFirestoreWrite(key: string): boolean {
+  return pendingFirestoreValues.has(key) || firestoreTimers.has(key);
+}
+
 // Flush all pending writes immediately (called on beforeunload/visibilitychange-hidden)
 export function flushPendingFirestoreWrites(): Promise<void> {
   const entries = Array.from(pendingFirestoreValues.entries());
