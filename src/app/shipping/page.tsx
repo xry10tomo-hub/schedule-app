@@ -30,42 +30,45 @@ export default function ShippingPage() {
 
   useEffect(() => { loadRecords(); }, [loadRecords]);
 
-  // Manual carryover: move today's unfinished 予定 records to the next day
-  function handleCarryToNextDay() {
-    const planRecords = records.filter(r => !r.creator || r.creator.trim() === '');
-    if (planRecords.length === 0) {
-      alert('予定に移動できる記録がありません');
-      return;
-    }
-    const next = new Date(selectedDate + 'T00:00:00');
-    next.setDate(next.getDate() + 1);
-    const nextDateStr = next.toLocaleDateString('en-CA');
+  // Auto-carryover: when viewing today's date, move yesterday's incomplete (creator empty)
+  // records FORWARD to today and DELETE them from yesterday. Idempotent: won't re-carry
+  // records that were already moved (tracked by carriedFromId).
+  useEffect(() => {
+    if (!selectedDate) return;
+    const today = new Date().toLocaleDateString('en-CA');
+    if (selectedDate !== today) return; // only auto-carry into today
+
+    const prevDate = new Date(selectedDate + 'T00:00:00');
+    prevDate.setDate(prevDate.getDate() - 1);
+    const prevDateStr = prevDate.toLocaleDateString('en-CA');
 
     const all = getShippingRecords();
-    const nextDayRecords = all.filter(r => r.date === nextDateStr);
-    const carriedSourceIds = new Set(
-      nextDayRecords.map(t => t.carriedFromId).filter((id): id is string => typeof id === 'string')
-    );
+    // Yesterday's incomplete records = 予定 (no creator entered yet)
+    const yesterdayIncomplete = all.filter(r => r.date === prevDateStr && (!r.creator || r.creator.trim() === ''));
+    if (yesterdayIncomplete.length === 0) return;
 
-    const toCarry: ShippingRecord[] = [];
-    for (const r of planRecords) {
-      if (carriedSourceIds.has(r.id)) continue;
-      toCarry.push({
-        ...r,
-        id: generateId(),
-        date: nextDateStr,
-        createdAt: new Date().toISOString(),
-        carriedOver: true,
-        carriedFromId: r.id,
-      });
-    }
-    if (toCarry.length === 0) {
-      alert('すでに翌日（' + nextDateStr + '）に移動済みです');
-      return;
-    }
-    setShippingRecords([...all, ...toCarry]);
-    alert(toCarry.length + '件を翌日（' + nextDateStr + '）に移動しました');
-  }
+    // Skip records that were already carried into today
+    const alreadyCarried = new Set(
+      all.filter(r => r.date === selectedDate && r.carriedFromId)
+        .map(r => r.carriedFromId as string)
+    );
+    const toCarry = yesterdayIncomplete.filter(r => !alreadyCarried.has(r.id));
+    if (toCarry.length === 0) return;
+
+    // Move: add to today, DELETE from yesterday (per user request: 持ち越した側の残りは消す)
+    const toAdd: ShippingRecord[] = toCarry.map(r => ({
+      ...r,
+      id: generateId(),
+      date: selectedDate,
+      createdAt: new Date().toISOString(),
+      carriedOver: true,
+      carriedFromId: r.id,
+    }));
+    const idsToRemove = new Set(toCarry.map(r => r.id));
+    const updated = all.filter(r => !idsToRemove.has(r.id)).concat(toAdd);
+    setShippingRecords(updated);
+    console.log(`[Shipping] Auto-carried ${toAdd.length} records: ${prevDateStr} → ${selectedDate}`);
+  }, [selectedDate, dataVersion]);
 
   // Sync shipping creators to home performance data for 【査定】計算書作成
   function syncCreatorToPerformance() {
@@ -244,11 +247,6 @@ export default function ShippingPage() {
           <div className="flex flex-col items-end gap-2">
             <div className="flex items-center gap-3">
               <span className="text-sm font-medium text-gray-600 bg-gray-100 px-3 py-2 rounded-lg">{selectedDate}</span>
-              <button
-                onClick={handleCarryToNextDay}
-                className="bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
-                title="予定（作成者未入力）の記録を翌日にコピーします"
-              >📤 翌日の郵送点数に移動</button>
               <button onClick={handleExportCSV} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition-colors">CSV出力</button>
             </div>
             {/* 郵便局AM率（右上コンパクト） */}
