@@ -1504,197 +1504,127 @@ export default function DailyPage() {
                     )}
                   </div>
 
-                  {/* 🏆 個人パフォーマンス順位（業務スピード対比 + GAP統合） */}
+                  {/* 🏆 部門別ランキング（画像査定 / 計算書作成） */}
                   {(() => {
-                    const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
+                    // 評価対象部門は固定の2つ
+                    const RANKING_TASKS: Array<{ taskName: string; emoji: string; color: string }> = [
+                      { taskName: '【LINE】画像査定', emoji: '📷', color: 'green' },
+                      { taskName: '【査定】計算書作成', emoji: '📝', color: 'blue' },
+                    ];
 
-                    // 評価対象 = 日次業務入力で「対応可能メンバー」が設定されている業務 のみ
-                    const trackedTaskNames = Object.entries(taskAssignments)
-                      .filter(([, cfg]) => (cfg.assignableMemberIds || []).length > 0)
-                      .map(([name]) => name);
-
-                    type TaskResult = {
-                      taskName: string;
-                      targetSpeed: number;
-                      actualMinutes: number;
-                      actualUnit: number;
-                      unitLabel: string;
-                      actualSpeed: number;
-                      performance: number; // target/actual: >1 = 目標より速い (good)
-                      plannedMinutes: number;
-                      gap: number;
-                    };
-                    type MemberRanking = {
-                      member: typeof members[number];
-                      taskResults: TaskResult[];
-                      weightedScore: number;
-                      totalActualMinutes: number;
-                    };
-
-                    const rankings: MemberRanking[] = [];
-                    for (const m of members) {
-                      const taskResults: TaskResult[] = [];
-                      let totalActualMinutes = 0;
-                      let weightedSum = 0;
-                      for (const tn of trackedTaskNames) {
-                        const cfg = taskAssignments[tn];
-                        if (!cfg.assignableMemberIds.includes(m.id)) continue;
-                        const targetSpeed = m.speedRatings?.[tn] || 0;
-                        if (targetSpeed <= 0) continue;
-                        const actualMinutes = actualTimelineAggregation[tn]?.members?.[m.id] || 0;
-                        if (actualMinutes <= 0) continue;
-                        const usePoint = POINTS_BASED_SPEED_TASKS.includes(tn);
-                        const perf = perfData[m.id]?.[tn];
-                        const actualUnit = usePoint ? (perf?.points || 0) : (perf?.count || 0);
-                        if (actualUnit <= 0) continue;
-                        const actualSpeed = actualMinutes / actualUnit;
-                        const performance = targetSpeed / actualSpeed;
-                        const plannedMinutes = tasks.filter(t => t.taskName === tn && t.assigneeId === m.id).reduce((s, t) => s + t.plannedMinutes, 0);
-                        taskResults.push({
-                          taskName: tn,
+                    // ある業務に対する全メンバーのランキングを算出
+                    function computeRanking(taskName: string) {
+                      const cfg = taskAssignments[taskName];
+                      const eligibleIds = cfg?.assignableMemberIds || [];
+                      type Row = {
+                        member: typeof members[number];
+                        targetSpeed: number;
+                        actualMinutes: number;
+                        actualPoints: number;
+                        actualSpeed: number; // min/point
+                        delta: number; // actualSpeed - targetSpeed (負=速い=良い)
+                      };
+                      const rows: Row[] = [];
+                      for (const m of members) {
+                        if (!eligibleIds.includes(m.id)) continue;
+                        const targetSpeed = m.speedRatings?.[taskName] || 0;
+                        const actualMinutes = actualTimelineAggregation[taskName]?.members?.[m.id] || 0;
+                        const perf = perfData[m.id]?.[taskName];
+                        const actualPoints = perf?.points || 0;
+                        if (targetSpeed <= 0 || actualMinutes <= 0 || actualPoints <= 0) continue;
+                        const actualSpeed = actualMinutes / actualPoints;
+                        rows.push({
+                          member: m,
                           targetSpeed,
                           actualMinutes,
-                          actualUnit,
-                          unitLabel: usePoint ? '点' : '件',
+                          actualPoints,
                           actualSpeed,
-                          performance,
-                          plannedMinutes,
-                          gap: actualMinutes - plannedMinutes,
+                          delta: actualSpeed - targetSpeed,
                         });
-                        totalActualMinutes += actualMinutes;
-                        weightedSum += performance * actualMinutes;
                       }
-                      if (taskResults.length === 0) continue;
-                      taskResults.sort((a, b) => b.performance - a.performance);
-                      rankings.push({
-                        member: m,
-                        taskResults,
-                        weightedScore: totalActualMinutes > 0 ? weightedSum / totalActualMinutes : 0,
-                        totalActualMinutes,
-                      });
+                      // Sort: 速い順（actualSpeedが小さいほど上位）
+                      rows.sort((a, b) => a.actualSpeed - b.actualSpeed);
+                      return rows;
                     }
-                    rankings.sort((a, b) => b.weightedScore - a.weightedScore);
+
+                    // 評価ラベル：分かりやすい日本語表記
+                    function evalLabel(targetSpeed: number, actualSpeed: number): { text: string; color: string; bg: string; emoji: string } {
+                      const delta = actualSpeed - targetSpeed; // 負=速い、正=遅い
+                      const absDeltaPerUnit = Math.round(Math.abs(delta) * 10) / 10;
+                      if (delta <= -0.1) {
+                        return { text: `目標より ${absDeltaPerUnit}分/点 速い`, color: 'text-green-800', bg: 'bg-green-100', emoji: '🚀' };
+                      }
+                      if (delta < 0.1) {
+                        return { text: '目標どおり', color: 'text-emerald-700', bg: 'bg-emerald-100', emoji: '✅' };
+                      }
+                      if (delta < targetSpeed * 0.3) {
+                        return { text: `目標より ${absDeltaPerUnit}分/点 遅い`, color: 'text-amber-800', bg: 'bg-amber-100', emoji: '📈' };
+                      }
+                      return { text: `目標より ${absDeltaPerUnit}分/点 遅い`, color: 'text-red-700', bg: 'bg-red-100', emoji: '⚠️' };
+                    }
 
                     return (
-                      <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-xl shadow-sm border-2 border-amber-300 p-5">
-                        <h3 className="text-base font-bold text-amber-900 mb-1 flex items-center gap-2">
-                          <span>🏆</span>
-                          個人パフォーマンス順位（業務スピード対比 + 予定/実績GAP）
-                        </h3>
-                        <p className="text-[11px] text-amber-700 mb-4">
-                          「対応可能メンバー」で速度設定済み × 当日実績ありの組合せが評価対象。
-                          <strong className="text-amber-900">達成率 = 目標スピード ÷ 実績スピード × 100</strong>（100%超 = 目標より速い）。
-                        </p>
-
-                        {rankings.length === 0 ? (
-                          <p className="text-xs text-gray-500 bg-white rounded p-4">
-                            評価対象データがありません。日次業務入力画面の「対応可能メンバー」でメンバーに <strong>分/点</strong> または <strong>分/件</strong> の速度設定をし、当日の実績入力が必要です。
-                          </p>
-                        ) : (
-                          <>
-                            {/* Top 3 podium (visual) */}
-                            <div className="grid grid-cols-3 gap-3 mb-5 items-end">
-                              {[1, 0, 2].map(rankIdx => {
-                                const r = rankings[rankIdx];
-                                if (!r) return <div key={rankIdx} />;
-                                const medals = ['🥇', '🥈', '🥉'];
-                                const heights = ['h-20', 'h-28', 'h-16'];
-                                const bgColors = ['bg-yellow-200', 'bg-yellow-300', 'bg-orange-200'];
-                                const pctText = `${Math.round(r.weightedScore * 100)}%`;
-                                return (
-                                  <div key={rankIdx} className="flex flex-col items-center">
-                                    <div className="text-3xl mb-1">{medals[rankIdx]}</div>
-                                    <p className="text-sm font-bold text-amber-900">{r.member.name}</p>
-                                    <p className={`text-lg font-extrabold ${r.weightedScore >= 1 ? 'text-green-700' : r.weightedScore >= 0.8 ? 'text-amber-700' : 'text-red-600'}`}>
-                                      {pctText}
-                                    </p>
-                                    <div className={`w-full ${heights[rankIdx]} ${bgColors[rankIdx]} rounded-t-lg mt-1 flex items-center justify-center text-2xl font-extrabold text-amber-900`}>
-                                      {rankIdx + 1}
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-
-                            {/* Full ranking list */}
-                            <div className="space-y-3">
-                              {rankings.map((r, idx) => {
-                                const pct = Math.round(r.weightedScore * 100);
-                                const barWidth = Math.min(160, pct); // cap visual at 160%
-                                const barColor = r.weightedScore >= 1.1 ? 'bg-green-500'
-                                  : r.weightedScore >= 0.9 ? 'bg-emerald-500'
-                                  : r.weightedScore >= 0.7 ? 'bg-amber-500'
-                                  : 'bg-red-500';
-                                const rankBadge = idx === 0 ? 'bg-yellow-300 text-yellow-900' : idx === 1 ? 'bg-gray-300 text-gray-800' : idx === 2 ? 'bg-orange-300 text-orange-900' : 'bg-gray-200 text-gray-700';
-                                return (
-                                  <div key={r.member.id} className={`rounded-lg p-3 ${idx === 0 ? 'bg-white border-2 border-yellow-400 shadow-md' : 'bg-white border border-gray-200'}`}>
-                                    <div className="flex items-center gap-3 mb-2">
-                                      <span className={`inline-flex items-center justify-center w-8 h-8 rounded-full text-sm font-extrabold ${rankBadge}`}>
-                                        {idx + 1}
-                                      </span>
-                                      {idx < 3 && <span className="text-lg">{['🥇', '🥈', '🥉'][idx]}</span>}
-                                      <span className="text-base font-bold text-gray-800 flex-1">{r.member.name}</span>
-                                      <div className="text-right">
-                                        <p className={`text-xl font-extrabold ${r.weightedScore >= 1 ? 'text-green-700' : r.weightedScore >= 0.7 ? 'text-amber-700' : 'text-red-600'}`}>
-                                          {pct}%
-                                        </p>
-                                        <p className="text-[10px] text-gray-500">実績時間 {fmtNum(r.totalActualMinutes)}分</p>
+                      <div className="space-y-5">
+                        {RANKING_TASKS.map(rt => {
+                          const rows = computeRanking(rt.taskName);
+                          const borderClass = rt.color === 'green' ? 'border-green-300' : 'border-blue-300';
+                          const bgClass = rt.color === 'green' ? 'from-green-50 to-emerald-50' : 'from-blue-50 to-sky-50';
+                          const titleColor = rt.color === 'green' ? 'text-green-800' : 'text-blue-800';
+                          return (
+                            <div key={rt.taskName} className={`bg-gradient-to-br ${bgClass} rounded-xl shadow-sm border-2 ${borderClass} p-5`}>
+                              <h3 className={`text-base font-bold ${titleColor} mb-3 flex items-center gap-2`}>
+                                <span className="text-xl">{rt.emoji}</span>
+                                {rt.taskName} ランキング
+                              </h3>
+                              {rows.length === 0 ? (
+                                <p className="text-xs text-gray-500 bg-white rounded p-4">
+                                  評価対象がありません。「対応可能メンバー」で速度（分/点）を設定し、当日の <strong>実績時間</strong> と <strong>点数</strong> を入力するとランキングが表示されます。
+                                </p>
+                              ) : (
+                                <div className="space-y-2">
+                                  {rows.map((r, idx) => {
+                                    const label = evalLabel(r.targetSpeed, r.actualSpeed);
+                                    const rankMedal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : '';
+                                    const rankBadgeColor = idx === 0 ? 'bg-yellow-300 text-yellow-900' : idx === 1 ? 'bg-gray-300 text-gray-800' : idx === 2 ? 'bg-orange-300 text-orange-900' : 'bg-gray-200 text-gray-700';
+                                    return (
+                                      <div key={r.member.id} className={`rounded-lg p-3 ${idx === 0 ? 'bg-white border-2 border-yellow-400 shadow-md' : 'bg-white border border-gray-200'}`}>
+                                        <div className="flex items-center gap-3 flex-wrap">
+                                          <span className={`inline-flex items-center justify-center w-9 h-9 rounded-full text-base font-extrabold ${rankBadgeColor}`}>
+                                            {idx + 1}
+                                          </span>
+                                          {rankMedal && <span className="text-xl">{rankMedal}</span>}
+                                          <span className="text-base font-bold text-gray-800 min-w-[60px]">{r.member.name}</span>
+                                          {/* 実績の数値群 */}
+                                          <div className="flex items-baseline gap-1 px-2 py-1 bg-purple-50 rounded">
+                                            <span className="text-[10px] text-gray-500">実績</span>
+                                            <span className="text-lg font-extrabold text-purple-700">{fmtNum(r.actualPoints)}</span>
+                                            <span className="text-xs text-purple-600">点</span>
+                                            <span className="text-[10px] text-gray-400 ml-1">/ {fmtNum(r.actualMinutes)}分</span>
+                                          </div>
+                                          {/* スピード対比 */}
+                                          <div className="flex items-baseline gap-1 text-xs">
+                                            <span className="text-gray-500">目標</span>
+                                            <span className="font-bold text-gray-700">{r.targetSpeed}分/点</span>
+                                            <span className="text-gray-400 mx-1">→</span>
+                                            <span className="text-gray-500">実績</span>
+                                            <span className={`font-extrabold ${r.actualSpeed <= r.targetSpeed ? 'text-green-700' : 'text-red-600'}`}>
+                                              {Math.round(r.actualSpeed * 10) / 10}分/点
+                                            </span>
+                                          </div>
+                                          {/* 評価ラベル */}
+                                          <span className={`px-3 py-1 rounded-full text-sm font-bold ${label.bg} ${label.color} ml-auto flex items-center gap-1`}>
+                                            <span>{label.emoji}</span>
+                                            {label.text}
+                                          </span>
+                                        </div>
                                       </div>
-                                    </div>
-                                    {/* Performance bar with 100% mark */}
-                                    <div className="relative h-3 bg-gray-100 rounded-full overflow-hidden mb-3">
-                                      <div className={`h-full ${barColor} transition-all`} style={{ width: `${(barWidth / 160) * 100}%` }} />
-                                      <div className="absolute top-0 bottom-0" style={{ left: `${(100 / 160) * 100}%` }}>
-                                        <div className="w-px h-full bg-gray-700/40" title="目標 100%" />
-                                      </div>
-                                    </div>
-                                    {/* Per-task table */}
-                                    <div className="overflow-x-auto">
-                                      <table className="w-full text-[11px]">
-                                        <thead>
-                                          <tr className="text-left text-gray-500 border-b">
-                                            <th className="pb-1 pr-2">業務</th>
-                                            <th className="pb-1 pr-2 text-right">目標</th>
-                                            <th className="pb-1 pr-2 text-right">実績</th>
-                                            <th className="pb-1 pr-2 text-right">達成率</th>
-                                            <th className="pb-1 pr-2 text-right">予定時間</th>
-                                            <th className="pb-1 pr-2 text-right">実績時間</th>
-                                            <th className="pb-1 text-right">差分</th>
-                                          </tr>
-                                        </thead>
-                                        <tbody>
-                                          {r.taskResults.map(tr => {
-                                            const taskPct = Math.round(tr.performance * 100);
-                                            return (
-                                              <tr key={tr.taskName} className="border-b border-gray-50">
-                                                <td className="py-1 pr-2">
-                                                  <div className="flex items-center gap-1">
-                                                    <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getTaskColor(tr.taskName) }} />
-                                                    <span className="text-gray-700">{tr.taskName.replace(/^【[^】]+】/, '')}</span>
-                                                  </div>
-                                                </td>
-                                                <td className="py-1 pr-2 text-right text-gray-600">{tr.targetSpeed}分/{tr.unitLabel}</td>
-                                                <td className="py-1 pr-2 text-right text-blue-700 font-bold">{Math.round(tr.actualSpeed * 10) / 10}分/{tr.unitLabel}</td>
-                                                <td className={`py-1 pr-2 text-right font-extrabold ${tr.performance >= 1 ? 'text-green-700' : tr.performance >= 0.7 ? 'text-amber-700' : 'text-red-600'}`}>
-                                                  {taskPct}% {tr.performance >= 1.1 ? '🚀' : tr.performance < 0.7 ? '⚠️' : ''}
-                                                </td>
-                                                <td className="py-1 pr-2 text-right text-gray-600">{fmtNum(tr.plannedMinutes)}分</td>
-                                                <td className="py-1 pr-2 text-right text-blue-700 font-bold">{fmtNum(tr.actualMinutes)}分</td>
-                                                <td className={`py-1 text-right font-bold ${tr.gap > 0 ? 'text-red-500' : tr.gap < 0 ? 'text-green-600' : 'text-gray-400'}`}>
-                                                  {tr.gap > 0 ? '+' : ''}{fmtNum(tr.gap)}分
-                                                </td>
-                                              </tr>
-                                            );
-                                          })}
-                                        </tbody>
-                                      </table>
-                                    </div>
-                                  </div>
-                                );
-                              })}
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
-                          </>
-                        )}
+                          );
+                        })}
                       </div>
                     );
                   })()}
