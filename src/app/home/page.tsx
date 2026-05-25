@@ -325,9 +325,13 @@ export default function HomePage() {
   }
 
   // ===== Browser notification for overdue tasks =====
-  // === 18:00過ぎチェック専用アラート（【補助】返送） ===
-  const notifiedEveningRef = useRef<Set<string>>(new Set());
-  const [eveningAlerts, setEveningAlerts] = useState<string[]>([]);
+  // === 時刻超過アラート ===
+  // 各業務の予定時刻 1分後に発火（その業務に実績が入力されていない場合）
+  // ・【補助】返送: 15:00 → 15:01 にアラート
+  // ・【査定】再提出: 09:45 → 09:46 にアラート
+  const notifiedAlertRef = useRef<Set<string>>(new Set());
+  const [activeAlerts, setActiveAlerts] = useState<{ taskName: string; scheduled: string }[]>([]);
+  const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
 
   // Request desktop notification permission once
   useEffect(() => {
@@ -336,20 +340,25 @@ export default function HomePage() {
     }
   }, []);
 
-  // Single useEffect: periodically check evening alerts. No useCallback to avoid dep-array churn.
   useEffect(() => {
-    const TARGETS = ['【補助】返送'];
-    const THRESHOLD_MIN = 18 * 60 + 1; // 18:01
+    // taskName → 予定時刻（HH:MM）
+    const ALERT_SCHEDULE: Record<string, string> = {
+      '【補助】返送': '15:00',
+      '【査定】再提出': '09:45',
+    };
 
     function check() {
       const now = new Date();
       const todayStr = now.toLocaleDateString('en-CA');
-      if (selectedDate !== todayStr) { setEveningAlerts([]); return; }
+      if (selectedDate !== todayStr) { setActiveAlerts([]); return; }
       const currentMinutes = now.getHours() * 60 + now.getMinutes();
-      if (currentMinutes < THRESHOLD_MIN) { setEveningAlerts([]); return; }
 
-      const pending: string[] = [];
-      for (const taskName of TARGETS) {
+      const pending: { taskName: string; scheduled: string }[] = [];
+      for (const [taskName, scheduled] of Object.entries(ALERT_SCHEDULE)) {
+        const [h, m] = scheduled.split(':').map(Number);
+        const thresholdMin = h * 60 + m + 1; // 予定時刻 + 1分
+        if (currentMinutes < thresholdMin) continue;
+
         const rows = tasks.filter(t => t.taskName === taskName);
         if (rows.length === 0) continue;
         let totalActualCount = 0;
@@ -359,20 +368,21 @@ export default function HomePage() {
         });
         const dailyActual = rows.reduce((s, t) => s + (t.actualCount || 0), 0);
         const someoneCompleted = rows.some(t => t.status === 'completed');
-        if (!(someoneCompleted || totalActualCount > 0 || dailyActual > 0)) {
-          pending.push(taskName);
-        }
-      }
-      setEveningAlerts(pending);
+        if (someoneCompleted || totalActualCount > 0 || dailyActual > 0) continue;
 
-      // Desktop notification once per task per day
-      for (const taskName of pending) {
-        const notifKey = `${selectedDate}-evening-${taskName}`;
-        if (!notifiedEveningRef.current.has(notifKey)) {
-          notifiedEveningRef.current.add(notifKey);
+        // この日に既に閉じられたアラートは表示しない
+        const dismissKey = `${todayStr}-${taskName}`;
+        if (dismissedAlerts.has(dismissKey)) continue;
+
+        pending.push({ taskName, scheduled });
+
+        // デスクトップ通知: 1日1回・1業務のみ
+        const notifKey = `${todayStr}-alert-${taskName}`;
+        if (!notifiedAlertRef.current.has(notifKey)) {
+          notifiedAlertRef.current.add(notifKey);
           if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-            new Notification('⏰ 18時超過アラート', {
-              body: `「${taskName}」が予定時刻（18:00）を過ぎています。完了確認をお願いします。`,
+            new Notification('⏰ 時刻超過アラート', {
+              body: `「${taskName}」が予定時刻（${scheduled}）を過ぎています。完了確認をお願いします。`,
               icon: '/favicon.ico',
               tag: notifKey,
               requireInteraction: true,
@@ -380,12 +390,24 @@ export default function HomePage() {
           }
         }
       }
+      setActiveAlerts(pending);
     }
 
     check();
     const interval = setInterval(check, 60_000);
     return () => clearInterval(interval);
-  }, [selectedDate, tasks, performanceData]);
+  }, [selectedDate, tasks, performanceData, dismissedAlerts]);
+
+  // ×ボタンでアラートを消す
+  function dismissAlert(taskName: string) {
+    const todayStr = new Date().toLocaleDateString('en-CA');
+    const dismissKey = `${todayStr}-${taskName}`;
+    setDismissedAlerts(prev => {
+      const next = new Set(prev);
+      next.add(dismissKey);
+      return next;
+    });
+  }
 
   // Active members (with shifts)
   const activeMembers = useMemo(() => {
@@ -415,24 +437,29 @@ export default function HomePage() {
 
   return (
     <DashboardLayout>
-      {/* 18時超過アラート: 【補助】返送・【売却】承諾確認・催促 (全員のPCに表示) */}
-      {eveningAlerts.length > 0 && (
-        <div className="fixed top-4 right-4 z-[9999] max-w-md w-[92vw] sm:w-auto animate-fade-in">
-          <div className="bg-red-600 text-white rounded-xl shadow-2xl border-2 border-red-800 p-4">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-2xl animate-pulse">⏰</span>
-              <h3 className="text-sm font-extrabold">18時超過アラート（{eveningAlerts.length}件）</h3>
-            </div>
-            <p className="text-[10px] text-red-100 mb-2">予定時刻 18:00 を 1分以上 超過しています。完了確認をしてください。</p>
-            <div className="space-y-1.5">
-              {eveningAlerts.map(taskName => (
-                <div key={taskName} className="flex items-center gap-2 text-xs bg-red-700/50 rounded px-2 py-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-white flex-shrink-0" />
-                  <strong>{taskName}</strong>
+      {/* 時刻超過アラート (全員のPCに表示・×で閉じる) */}
+      {activeAlerts.length > 0 && (
+        <div className="fixed top-4 right-4 z-[9999] max-w-md w-[92vw] sm:w-auto animate-fade-in space-y-2">
+          {activeAlerts.map(a => (
+            <div key={a.taskName} className="bg-red-600 text-white rounded-xl shadow-2xl border-2 border-red-800 p-4">
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl animate-pulse">⏰</span>
+                  <h3 className="text-sm font-extrabold">時刻超過アラート</h3>
                 </div>
-              ))}
+                <button
+                  onClick={() => dismissAlert(a.taskName)}
+                  className="text-white/80 hover:text-white text-xl leading-none font-bold flex-shrink-0"
+                  title="このアラートを閉じる"
+                >×</button>
+              </div>
+              <div className="flex items-center gap-2 text-xs bg-red-700/50 rounded px-2 py-1.5 mt-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-white flex-shrink-0" />
+                <strong>{a.taskName}</strong>
+                <span className="ml-auto text-red-100">予定 {a.scheduled} 超過</span>
+              </div>
             </div>
-          </div>
+          ))}
         </div>
       )}
 
