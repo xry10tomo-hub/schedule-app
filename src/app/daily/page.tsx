@@ -50,7 +50,7 @@ export default function DailyPage() {
   const [showForm, setShowForm] = useState(false);
   const [taskDefs, setTaskDefsState] = useState<TaskDefinition[]>(DEFAULT_TASKS);
   const [viewTab, setViewTab] = useState<'plan' | 'actual' | 'review'>('plan');
-  const [showGap, setShowGap] = useState(false);
+  const [showGap, setShowGap] = useState(true);
 
   // Timeline state
   const [timelineData, setTimelineDataState] = useState<Record<string, Record<string, string>>>({});
