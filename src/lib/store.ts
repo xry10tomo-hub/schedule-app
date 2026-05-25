@@ -776,7 +776,7 @@ export function setActualTimelineForDate(date: string, blocks: Record<string, Re
 
 // ============ Actual Performance (per-date, per-member, per-task: count/points) ============
 // Structure: { [date]: { [memberId]: { [taskName]: { count: number, points: number } } } }
-export type ActualPerformanceEntry = { count: number; points: number };
+export type ActualPerformanceEntry = { count: number; points: number; shippingPoints?: number };
 export type ActualPerformanceData = Record<string, Record<string, Record<string, ActualPerformanceEntry>>>;
 
 export function getActualPerformanceAll(): ActualPerformanceData {

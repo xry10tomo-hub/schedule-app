@@ -5,12 +5,14 @@ import DashboardLayout from '@/components/DashboardLayout';
 import { useAppContext, getDailyTasks, getActualPerformanceAll, getActualTimelineBlocks, getTimelineBlocks, getShifts, getDaysInMonth, exportToCSV, getCategoryTaskColor, getFixedTasks, fmtNum } from '@/lib/store';
 import type { DailyTask } from '@/lib/types';
 
-type Metric = 'minutes' | 'count' | 'points' | 'speed';
+type Metric = 'minutes' | 'count' | 'points' | 'speed' | 'shippingPoints' | 'shippingRate';
 const METRIC_LABELS: Record<Metric, string> = {
   minutes: '実績時間（分）',
   count: '件数',
   points: '点数',
   speed: '平均スピード',
+  shippingPoints: '郵送点数',
+  shippingRate: '郵送率',
 };
 const METRIC_ORDER: Metric[] = ['minutes', 'count', 'points', 'speed'];
 const METRIC_BG: Record<Metric, string> = {
@@ -18,16 +20,28 @@ const METRIC_BG: Record<Metric, string> = {
   count: 'bg-purple-50/50',
   points: 'bg-pink-50/50',
   speed: 'bg-emerald-50/50',
+  shippingPoints: 'bg-rose-50/50',
+  shippingRate: 'bg-fuchsia-50/50',
 };
 const METRIC_TEXT: Record<Metric, string> = {
   minutes: 'text-blue-700',
   count: 'text-purple-700',
   points: 'text-pink-700',
   speed: 'text-emerald-700',
+  shippingPoints: 'text-rose-700',
+  shippingRate: 'text-fuchsia-700',
 };
 
 // Tasks where speed should be calculated per-point
 const POINTS_BASED_SPEED_TASKS = ['【LINE】画像査定', '【査定】計算書作成', '【営業】商材追い電話'];
+// Tasks that have 郵送点数 / 郵送率 metrics (extra rows in matrix)
+const SHIPPING_METRIC_TASKS = ['【営業】商材追い電話'];
+function metricsForTask(taskName: string): Metric[] {
+  if (SHIPPING_METRIC_TASKS.includes(taskName)) {
+    return ['minutes', 'count', 'points', 'speed', 'shippingPoints', 'shippingRate'];
+  }
+  return METRIC_ORDER;
+}
 
 export default function AdminPage() {
   const { members, dataVersion } = useAppContext();
@@ -134,12 +148,12 @@ export default function AdminPage() {
     }
 
     // For each task and each day, compute the value
-    const data: Record<string, Record<number, { minutes: number; count: number; points: number; isEstimate?: boolean }>> = {};
+    const data: Record<string, Record<number, { minutes: number; count: number; points: number; shippingPoints: number; isEstimate?: boolean }>> = {};
     for (const tn of taskNames) {
       data[tn] = {};
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
-        let minutes = 0, count = 0, points = 0;
+        let minutes = 0, count = 0, points = 0, shippingPoints = 0;
         let isEstimate = false;
 
         // ① 実績タイムラインブロック（15分/ブロック）
@@ -160,7 +174,7 @@ export default function AdminPage() {
           });
         }
 
-        // ③ ホーム画面の実績入力（件数・点数）
+        // ③ ホーム画面の実績入力（件数・点数・郵送点数）
         const datePerf = monthData.allPerf[dateStr] || {};
         Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
@@ -168,6 +182,7 @@ export default function AdminPage() {
           if (entry) {
             count += entry.count || 0;
             points += entry.points || 0;
+            shippingPoints += (entry as { shippingPoints?: number }).shippingPoints || 0;
           }
         });
 
@@ -202,7 +217,7 @@ export default function AdminPage() {
           }
         }
 
-        data[tn][d] = { minutes, count, points, isEstimate };
+        data[tn][d] = { minutes, count, points, shippingPoints, isEstimate };
       }
     }
     return { taskNames, data };
@@ -210,10 +225,16 @@ export default function AdminPage() {
   }, [allTasks, monthData, daysInMonth, monthStr, selectedMemberId, showAllTasks, members]);
 
   function formatCellByMetric(taskName: string, d: number, m: Metric): string {
-    const cell = matrix.data[taskName]?.[d] || { minutes: 0, count: 0, points: 0 };
+    const cell = matrix.data[taskName]?.[d] || { minutes: 0, count: 0, points: 0, shippingPoints: 0 };
     if (m === 'minutes') return cell.minutes > 0 ? fmtNum(cell.minutes) : '';
     if (m === 'count') return cell.count > 0 ? fmtNum(cell.count) : '';
     if (m === 'points') return cell.points > 0 ? fmtNum(cell.points) : '';
+    if (m === 'shippingPoints') return cell.shippingPoints > 0 ? fmtNum(cell.shippingPoints) : '';
+    if (m === 'shippingRate') {
+      return cell.points > 0 && cell.shippingPoints > 0
+        ? `${Math.round((cell.shippingPoints / cell.points) * 1000) / 10}%`
+        : '';
+    }
     // speed
     const usePoint = POINTS_BASED_SPEED_TASKS.includes(taskName);
     const denom = usePoint ? cell.points : cell.count;
@@ -223,22 +244,23 @@ export default function AdminPage() {
     return '';
   }
 
-  function rowTotal(taskName: string): { minutes: number; count: number; points: number; speed: string } {
-    let mins = 0, cnt = 0, pts = 0;
+  function rowTotal(taskName: string): { minutes: number; count: number; points: number; shippingPoints: number; speed: string; shippingRate: string } {
+    let mins = 0, cnt = 0, pts = 0, sp = 0;
     for (let d = 1; d <= daysInMonth; d++) {
-      const c = matrix.data[taskName]?.[d] || { minutes: 0, count: 0, points: 0 };
-      mins += c.minutes; cnt += c.count; pts += c.points;
+      const c = matrix.data[taskName]?.[d] || { minutes: 0, count: 0, points: 0, shippingPoints: 0 };
+      mins += c.minutes; cnt += c.count; pts += c.points; sp += c.shippingPoints;
     }
     const usePoint = POINTS_BASED_SPEED_TASKS.includes(taskName);
     const denom = usePoint ? pts : cnt;
     const speed = denom > 0 && mins > 0 ? `${Math.round((mins / denom) * 10) / 10}` : '';
-    return { minutes: mins, count: cnt, points: pts, speed };
+    const shippingRate = pts > 0 && sp > 0 ? `${Math.round((sp / pts) * 1000) / 10}%` : '';
+    return { minutes: mins, count: cnt, points: pts, shippingPoints: sp, speed, shippingRate };
   }
 
   function colTotal(d: number): { minutes: number; count: number; points: number } {
     let mins = 0, cnt = 0, pts = 0;
     for (const tn of matrix.taskNames) {
-      const c = matrix.data[tn]?.[d] || { minutes: 0, count: 0, points: 0 };
+      const c = matrix.data[tn]?.[d] || { minutes: 0, count: 0, points: 0, shippingPoints: 0 };
       mins += c.minutes; cnt += c.count; pts += c.points;
     }
     return { minutes: mins, count: cnt, points: pts };
@@ -290,14 +312,19 @@ export default function AdminPage() {
   function handleExport() {
     const rows: Record<string, unknown>[] = [];
     matrix.taskNames.forEach(tn => {
-      // Existing 4 metrics
-      METRIC_ORDER.forEach(m => {
+      // Metrics per task (商材追い電話 has extra shipping metrics)
+      metricsForTask(tn).forEach(m => {
         const row: Record<string, unknown> = { 業務名: tn, 指標: METRIC_LABELS[m] };
         for (let d = 1; d <= daysInMonth; d++) {
           row[`${d}日`] = formatCellByMetric(tn, d, m);
         }
         const rt = rowTotal(tn);
-        const totalVal = m === 'minutes' ? rt.minutes : m === 'count' ? rt.count : m === 'points' ? rt.points : rt.speed;
+        const totalVal = m === 'minutes' ? rt.minutes
+          : m === 'count' ? rt.count
+          : m === 'points' ? rt.points
+          : m === 'shippingPoints' ? rt.shippingPoints
+          : m === 'shippingRate' ? rt.shippingRate
+          : rt.speed;
         row['合計'] = totalVal;
         rows.push(row);
       });
@@ -476,12 +503,19 @@ export default function AdminPage() {
               <tbody>
                 {matrix.taskNames.map(tn => {
                   const rt = rowTotal(tn);
-                  return METRIC_ORDER.map((m, idx) => {
-                    const totalDisplay = m === 'minutes' ? rt.minutes : m === 'count' ? rt.count : m === 'points' ? rt.points : rt.speed;
+                  const metricsForThisTask = metricsForTask(tn);
+                  const taskRowSpan = metricsForThisTask.length;
+                  return metricsForThisTask.map((m, idx) => {
+                    const totalDisplay = m === 'minutes' ? rt.minutes
+                      : m === 'count' ? rt.count
+                      : m === 'points' ? rt.points
+                      : m === 'shippingPoints' ? rt.shippingPoints
+                      : m === 'shippingRate' ? rt.shippingRate
+                      : rt.speed;
                     return (
                       <tr key={`${tn}-${m}`} className={`hover:bg-gray-50 ${METRIC_BG[m]} ${idx === 0 ? 'border-t-2 border-t-gray-300' : ''}`}>
                         {idx === 0 ? (
-                          <td rowSpan={4} className="sticky left-0 bg-white border border-gray-200 px-2 py-1 z-10 align-top">
+                          <td rowSpan={taskRowSpan} className="sticky left-0 bg-white border border-gray-200 px-2 py-1 z-10 align-top">
                             <div className="flex items-center gap-1">
                               <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ backgroundColor: getCategoryTaskColor(tn) }} />
                               <span className="text-gray-700 text-[10px] font-semibold" title={tn}>{tn}</span>

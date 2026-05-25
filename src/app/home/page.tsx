@@ -96,14 +96,14 @@ export default function HomePage() {
   }, [selectedDate, dataVersion, currentUserId]);
 
   // Task performance tracking config
-  const TASK_PERF_CONFIG: Record<string, { count?: boolean; points?: boolean }> = {
+  const TASK_PERF_CONFIG: Record<string, { count?: boolean; points?: boolean; shippingPoints?: boolean }> = {
     '【LINE】画像査定': { points: true },
     '【査定】計算書作成': { count: true, points: true },
     '【査定】計算書提出': { count: true },
     '【査定】計算書（下書き）': { count: true },
     '【補助】郵送物開封': { count: true },
     '【補助】返送': { count: true },
-    '【営業】商材追い電話': { count: true, points: true },
+    '【営業】商材追い電話': { count: true, points: true, shippingPoints: true },
   };
 
   // Get speed rating (minutes per 1 point) from member management
@@ -127,7 +127,7 @@ export default function HomePage() {
   }
 
   // Save performance entry for a specific field
-  function saveMyPerformance(taskName: string, field: 'count' | 'points', value: number) {
+  function saveMyPerformance(taskName: string, field: 'count' | 'points' | 'shippingPoints', value: number) {
     const newData = { ...performanceData };
     if (!newData[currentUserId]) newData[currentUserId] = {};
     if (!newData[currentUserId][taskName]) newData[currentUserId][taskName] = { count: 0, points: 0 };
@@ -1100,6 +1100,24 @@ export default function HomePage() {
                               onChange={e => saveMyPerformance(taskName, 'points', Number(e.target.value))}
                               className="w-16 border rounded px-1.5 py-0.5 text-xs text-center bg-white" />
                           </div>
+                        )}
+                        {perfConfig.shippingPoints && (
+                          <>
+                            <div className="flex items-center gap-1">
+                              <label className="text-[10px] text-gray-500">郵送点数:</label>
+                              <input type="number" min="0" value={perf?.shippingPoints || 0}
+                                onChange={e => saveMyPerformance(taskName, 'shippingPoints', Number(e.target.value))}
+                                className="w-16 border rounded px-1.5 py-0.5 text-xs text-center bg-white" />
+                            </div>
+                            {(() => {
+                              const pts = perf?.points || 0;
+                              const sp = perf?.shippingPoints || 0;
+                              const rate = pts > 0 ? Math.round((sp / pts) * 1000) / 10 : null;
+                              return rate !== null ? (
+                                <span className="text-[10px] text-pink-700 font-bold">郵送率 {rate}%</span>
+                              ) : null;
+                            })()}
+                          </>
                         )}
                         {avgSpeed !== null && (
                           <span className="text-[10px] text-green-700 font-bold">平均 {avgSpeed}分/{avgSpeedUnit}</span>
