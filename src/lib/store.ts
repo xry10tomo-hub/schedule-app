@@ -406,20 +406,26 @@ export function isFirestoreSyncReady(): boolean {
 const firestoreTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingFirestoreValues = new Map<string, unknown>();
 
+// Tracks keys where a Firestore setDoc is currently in-flight (after debounce timer fired)
+const inflightWrites = new Set<string>();
+
 async function writeWithRetry(key: string, value: unknown, attempt: number = 0): Promise<void> {
+  inflightWrites.add(key);
   try {
     await setDoc(doc(db, 'appData', key), {
       value: JSON.parse(JSON.stringify(value)),
       updatedAt: Date.now(),
     });
     console.log(`[Firestore] Synced "${key}" successfully`);
+    inflightWrites.delete(key);
   } catch (err) {
     console.error(`[Firestore] Sync error for "${key}" (attempt ${attempt + 1}):`, err);
     if (attempt < 3) {
-      // Retry after exponential backoff: 1s, 2s, 4s
+      // Retry after exponential backoff: 1s, 2s, 4s. Keep inflight flag during retries.
       setTimeout(() => writeWithRetry(key, value, attempt + 1), 1000 * Math.pow(2, attempt));
     } else {
       console.error(`[Firestore] Failed to sync "${key}" after 4 attempts`);
+      inflightWrites.delete(key);
     }
   }
 }
@@ -427,19 +433,20 @@ async function writeWithRetry(key: string, value: unknown, attempt: number = 0):
 function debouncedFirestoreSync(key: string, value: unknown) {
   const existing = firestoreTimers.get(key);
   if (existing) clearTimeout(existing);
-  // Track latest pending value so beforeunload can flush
   pendingFirestoreValues.set(key, value);
   firestoreTimers.set(key, setTimeout(() => {
     firestoreTimers.delete(key);
     pendingFirestoreValues.delete(key);
+    // writeWithRetry sets inflightWrites internally; hasPendingFirestoreWrite stays true until it completes
     writeWithRetry(key, value);
   }, 200));
 }
 
 // Allow AppProvider to check whether a local edit is awaiting Firestore sync.
-// Used to avoid clobbering pending local writes with stale remote snapshots.
+// Returns true while: (a) debounce timer is queued, (b) the value is pending, OR (c) setDoc is in-flight.
+// This prevents onSnapshot / forceRefresh from reading stale Firestore data and clobbering local edits.
 export function hasPendingFirestoreWrite(key: string): boolean {
-  return pendingFirestoreValues.has(key) || firestoreTimers.has(key);
+  return pendingFirestoreValues.has(key) || firestoreTimers.has(key) || inflightWrites.has(key);
 }
 
 // Flush all pending writes immediately (called on beforeunload/visibilitychange-hidden)

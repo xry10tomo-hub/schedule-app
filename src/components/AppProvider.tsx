@@ -191,22 +191,28 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         if (hasPendingFirestoreWrite(key)) return;
 
         const remoteData = snap.data().value;
+        const localRaw = localStorage.getItem(key);
 
         if (PER_USER_NESTED_KEYS.has(key)) {
           // Per-user nested data: deep-merge so user-A's recent local entries aren't lost
           // when user-B's write arrives for a different memberId key.
-          const localRaw = localStorage.getItem(key);
           let localData: unknown = null;
           try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
           const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
-          localStorage.setItem(key, JSON.stringify(merged));
+          const mergedStr = JSON.stringify(merged);
+          if (mergedStr !== localRaw) {
+            localStorage.setItem(key, mergedStr);
+            setDataVersion(v => v + 1);
+          }
         } else {
-          // Shared data (arrays, configs, planned timeline, etc.): trust remote as the latest server truth.
-          // Other users' updates flow through immediately; pending-write guard above protects our own edits.
-          localStorage.setItem(key, JSON.stringify(remoteData));
-          if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+          // Shared data: trust remote as latest server truth. Skip re-render if nothing changed.
+          const remoteStr = JSON.stringify(remoteData);
+          if (remoteStr !== localRaw) {
+            localStorage.setItem(key, remoteStr);
+            if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+            setDataVersion(v => v + 1);
+          }
         }
-        setDataVersion(v => v + 1);
       })
     );
 
@@ -221,6 +227,7 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         STORAGE_KEYS.actualTimeline,
       ]);
 
+      let changed = false;
       for (const key of SYNC_KEYS) {
         // Don't overwrite local edits that haven't synced to Firestore yet
         if (hasPendingFirestoreWrite(key)) continue;
@@ -233,7 +240,6 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
 
         if (!remoteExists) {
-          // Firestore empty for this key. If local has data, push it (initial seeding case).
           if (localData) {
             console.log(`[Firestore] forceRefresh: pushing local to empty remote "${key}"`);
             await setDoc(doc(db, 'appData', key), { value: localData, updatedAt: Date.now() });
@@ -242,16 +248,22 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         }
 
         if (PER_USER_NESTED_KEYS.has(key)) {
-          // Per-user nested data → deep-merge to preserve concurrent inputs across users
           const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
-          localStorage.setItem(key, JSON.stringify(merged));
+          const mergedStr = JSON.stringify(merged);
+          if (mergedStr !== localRaw) {
+            localStorage.setItem(key, mergedStr);
+            changed = true;
+          }
         } else {
-          // Shared data → trust remote as latest server truth
-          localStorage.setItem(key, JSON.stringify(remoteData));
-          if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+          const remoteStr = JSON.stringify(remoteData);
+          if (remoteStr !== localRaw) {
+            localStorage.setItem(key, remoteStr);
+            if (key === STORAGE_KEYS.members) setMembersState(remoteData as Member[]);
+            changed = true;
+          }
         }
       }
-      setDataVersion(v => v + 1);
+      if (changed) setDataVersion(v => v + 1);
     } catch (err) {
       console.error('Force refresh error:', err);
     }
