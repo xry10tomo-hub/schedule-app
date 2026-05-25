@@ -1542,8 +1542,8 @@ export default function DailyPage() {
                           delta: actualSpeed - targetSpeed,
                         });
                       }
-                      // Sort: 速い順（actualSpeedが小さいほど上位）
-                      rows.sort((a, b) => a.actualSpeed - b.actualSpeed);
+                      // 目標差(実績−目標)が小さい順 = 目標を最も上回って速かった人が1位
+                      rows.sort((a, b) => a.delta - b.delta);
                       return rows;
                     }
 
