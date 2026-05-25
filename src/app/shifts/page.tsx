@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getShifts, setShifts, generateId, getDaysInMonth, exportToCSV } from '@/lib/store';
-import type { ShiftEntry } from '@/lib/types';
+import { useAppContext, getShifts, setShifts, getMembers, setMembers, generateId, getDaysInMonth, exportToCSV } from '@/lib/store';
+import type { ShiftEntry, Member } from '@/lib/types';
 
 const PARTTIME_SHIFT_PRESETS = [
   { label: '10-14', start: '10:00', end: '14:00' },
@@ -21,12 +21,15 @@ const EMPLOYEE_SHIFT_PRESETS = [
   { label: '8:00-19:00', start: '08:00', end: '19:00' },
 ];
 
+const DAY_LABELS = ['日', '月', '火', '水', '木', '金', '土'];
+
 export default function ShiftsPage() {
-  const { members, dataVersion } = useAppContext();
+  const { members, dataVersion, refreshMembers } = useAppContext();
   const [shifts, setShiftsState] = useState<ShiftEntry[]>([]);
   const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth());
   const [selectingCell, setSelectingCell] = useState<{ memberId: string; day: number } | null>(null);
+  const [showDefaults, setShowDefaults] = useState(false);
 
   const employees = members.filter(m => m.role === 'employee');
   const parttimers = members.filter(m => m.role === 'parttime');
@@ -39,6 +42,54 @@ export default function ShiftsPage() {
   }, [monthStr, dataVersion]);
 
   useEffect(() => { loadShifts(); }, [loadShifts]);
+
+  // Auto-apply each member's weekly defaultShifts to days in the visible month that don't already
+  // have a shift. Runs once per month-change. Skips today/past if user has explicitly removed them.
+  useEffect(() => {
+    const allShifts = getShifts();
+    const newShifts: ShiftEntry[] = [];
+    for (const m of members) {
+      const pattern = m.defaultShifts;
+      if (!pattern || Object.keys(pattern).length === 0) continue;
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
+        // Skip if a shift already exists OR an explicit "off" marker exists
+        const exists = allShifts.some(s => s.memberId === m.id && s.date === dateStr);
+        if (exists) continue;
+        const dow = String(new Date(year, month, d).getDay());
+        const tpl = pattern[dow];
+        if (!tpl || !tpl.start || !tpl.end) continue; // dayOff in pattern
+        newShifts.push({
+          id: generateId(),
+          memberId: m.id,
+          date: dateStr,
+          startTime: tpl.start,
+          endTime: tpl.end,
+          note: '',
+        });
+      }
+    }
+    if (newShifts.length > 0) {
+      setShifts([...allShifts, ...newShifts]);
+      loadShifts();
+      console.log(`[Shifts] Auto-applied ${newShifts.length} default shifts for ${monthStr}`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monthStr, daysInMonth, members]);
+
+  // Update a member's defaultShifts and persist
+  function setMemberDefaultForDay(memberId: string, dow: string, value: { start: string; end: string } | null) {
+    const all = getMembers();
+    const updated = all.map(m => {
+      if (m.id !== memberId) return m;
+      const cur = { ...(m.defaultShifts || {}) };
+      if (value === null) delete cur[dow];
+      else cur[dow] = value;
+      return { ...m, defaultShifts: cur };
+    });
+    setMembers(updated);
+    refreshMembers();
+  }
 
   function getShiftForMemberDay(memberId: string, day: number): ShiftEntry | undefined {
     const dateStr = `${monthStr}-${String(day).padStart(2, '0')}`;
@@ -248,6 +299,80 @@ export default function ShiftsPage() {
         </div>
 
         <p className="text-sm text-gray-500">セルをクリックして時間帯を選択しシフトを追加できます。もう一度クリックで変更・削除が可能です。</p>
+
+        {/* 週間デフォルトパターン編集 */}
+        <div className="bg-white rounded-xl border-2 border-emerald-200 shadow-sm">
+          <button
+            onClick={() => setShowDefaults(v => !v)}
+            className="w-full px-4 py-3 flex items-center justify-between hover:bg-emerald-50 rounded-t-xl"
+          >
+            <span className="text-sm font-bold text-emerald-700">
+              🗓️ 週間デフォルトパターン（曜日ごとの固定シフト）— 設定すると毎月自動でこのパターンが反映されます
+            </span>
+            <span className="text-gray-400 text-xs">{showDefaults ? '▲ 閉じる' : '▼ 開く'}</span>
+          </button>
+          {showDefaults && (
+            <div className="p-4 border-t border-emerald-100">
+              <p className="text-xs text-gray-500 mb-3">
+                各メンバーの曜日ごとの定時を選択。「休」=その曜日は出勤なし。設定後、シフト一覧で空いている日に自動反映されます（既存シフトは上書きしません）。
+              </p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-gray-500">
+                      <th className="px-2 py-1.5 text-left font-medium sticky left-0 bg-white">メンバー</th>
+                      {DAY_LABELS.map((label, i) => (
+                        <th key={i} className={`px-2 py-1.5 text-center font-bold ${
+                          i === 0 ? 'text-red-500' : i === 6 ? 'text-blue-500' : 'text-gray-600'
+                        }`}>{label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {allMembers.map(m => {
+                      const presets = m.role === 'employee' ? EMPLOYEE_SHIFT_PRESETS : PARTTIME_SHIFT_PRESETS;
+                      return (
+                        <tr key={m.id} className="border-b border-gray-50 hover:bg-gray-50/50">
+                          <td className={`px-2 py-1.5 font-medium sticky left-0 bg-white ${m.role === 'employee' ? 'text-green-800' : 'text-blue-800'}`}>
+                            {m.name}
+                          </td>
+                          {DAY_LABELS.map((_, dow) => {
+                            const tpl = m.defaultShifts?.[String(dow)];
+                            const currentValue = tpl ? `${tpl.start}-${tpl.end}` : '';
+                            return (
+                              <td key={dow} className="px-1 py-1 text-center">
+                                <select
+                                  value={currentValue}
+                                  onChange={e => {
+                                    const v = e.target.value;
+                                    if (!v) {
+                                      setMemberDefaultForDay(m.id, String(dow), null);
+                                    } else {
+                                      const [start, end] = v.split('-');
+                                      setMemberDefaultForDay(m.id, String(dow), { start, end });
+                                    }
+                                  }}
+                                  className={`w-full border rounded px-1 py-0.5 text-[10px] ${
+                                    tpl ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-gray-50 text-gray-400 border-gray-200'
+                                  }`}
+                                >
+                                  <option value="">休</option>
+                                  {presets.map(p => (
+                                    <option key={p.label} value={`${p.start}-${p.end}`}>{p.label}</option>
+                                  ))}
+                                </select>
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Month Nav */}
         <div className="flex items-center justify-center gap-6">

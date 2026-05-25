@@ -10,6 +10,8 @@ export interface Member {
   priorityRatings: Record<string, number>; // taskName -> priority (1=最優先, 数字が小さいほど優先)
   scheduledTimeRatings: Record<string, string[]>; // taskName -> array of time ranges (e.g. ["09:00-10:00", "14:00-15:00"])
   email?: string;
+  // 週間デフォルトシフトパターン。キー='0'(日)〜'6'(土)、値={start, end}=出勤、未設定=休み
+  defaultShifts?: Record<string, { start: string; end: string }>;
 }
 
 export interface DailyTask {
