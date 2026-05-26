@@ -48,6 +48,7 @@ export default function HandoverPage() {
   const [showMemberTaskForm, setShowMemberTaskForm] = useState(false);
   const [mtFilterAssignee, setMtFilterAssignee] = useState('');
   const [mtFilterStatus, setMtFilterStatus] = useState<MemberTaskStatus | ''>('');
+  const [mtShowCompleted, setMtShowCompleted] = useState(false);
   // New member task form
   const [mtAssigneeId, setMtAssigneeId] = useState('');
   const [mtTaskContent, setMtTaskContent] = useState('');
@@ -158,8 +159,8 @@ export default function HandoverPage() {
 
   // Member task helpers
   function handleMemberTaskSubmit() {
-    if (!mtAssigneeId || !mtTaskContent || !mtPlannedDate) {
-      alert('担当者・業務内容・完了日（予定）を入力してください');
+    if (!mtTaskContent || !mtPlannedDate) {
+      alert('業務内容・完了日（予定）を入力してください');
       return;
     }
     const newTask: MemberTask = {
@@ -192,7 +193,12 @@ export default function HandoverPage() {
   const filteredMemberTasks = useMemo(() => {
     let list = [...memberTaskItems];
     if (mtFilterAssignee) list = list.filter(t => t.assigneeId === mtFilterAssignee);
-    if (mtFilterStatus) list = list.filter(t => t.status === mtFilterStatus);
+    if (mtFilterStatus) {
+      list = list.filter(t => t.status === mtFilterStatus);
+    } else if (!mtShowCompleted) {
+      // No explicit status filter → hide completed by default (show 未着手・進行中 only)
+      list = list.filter(t => t.status !== 'completed');
+    }
     // Sort: priority (high→medium→low), then plannedCompletionDate asc
     const pOrder: Record<MemberTaskPriority, number> = { high: 0, medium: 1, low: 2 };
     list.sort((a, b) => {
@@ -201,7 +207,7 @@ export default function HandoverPage() {
       return a.plannedCompletionDate.localeCompare(b.plannedCompletionDate);
     });
     return list;
-  }, [memberTaskItems, mtFilterAssignee, mtFilterStatus]);
+  }, [memberTaskItems, mtFilterAssignee, mtFilterStatus, mtShowCompleted]);
 
   // Form colors driven by sub-tab selection
   const formLabel = newShareSubTab === 'important' ? '重要案件' : '引き継ぎ';
@@ -405,11 +411,20 @@ export default function HandoverPage() {
                 onChange={e => setMtFilterStatus(e.target.value as MemberTaskStatus | '')}
                 className="border rounded-lg px-3 py-1.5 text-sm"
               >
-                <option value="">全ステータス</option>
+                <option value="">全ステータス（既定：完了は非表示）</option>
                 <option value="pending">未着手</option>
                 <option value="in_progress">進行中</option>
                 <option value="completed">完了</option>
               </select>
+              <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={mtShowCompleted}
+                  onChange={e => setMtShowCompleted(e.target.checked)}
+                  className="accent-purple-600"
+                />
+                完了も表示
+              </label>
               <span className="text-xs text-gray-500 ml-auto">{filteredMemberTasks.length}件</span>
               <button
                 onClick={() => setShowMemberTaskForm(v => !v)}
@@ -423,10 +438,10 @@ export default function HandoverPage() {
                 <h3 className="text-sm font-bold text-purple-700">新規タスク登録</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-xs font-semibold text-gray-600 mb-1">担当者 <span className="text-red-500">*</span></label>
+                    <label className="block text-xs font-semibold text-gray-600 mb-1">担当者 <span className="text-gray-400">（任意）</span></label>
                     <select value={mtAssigneeId} onChange={e => setMtAssigneeId(e.target.value)}
                       className="w-full border rounded-lg px-3 py-2 text-sm">
-                      <option value="">選択してください</option>
+                      <option value="">未割当</option>
                       {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                     </select>
                   </div>
@@ -475,7 +490,7 @@ export default function HandoverPage() {
                 <div className="flex justify-end">
                   <button
                     onClick={handleMemberTaskSubmit}
-                    disabled={!mtAssigneeId || !mtTaskContent || !mtPlannedDate}
+                    disabled={!mtTaskContent || !mtPlannedDate}
                     className="px-6 py-2 bg-purple-600 hover:bg-purple-700 text-white text-sm font-semibold rounded-lg disabled:opacity-50"
                   >登録する</button>
                 </div>
@@ -831,8 +846,8 @@ function MemberTaskRow({
   const isOverdue = !isCompleted && task.plannedCompletionDate < getToday();
 
   function handleSave() {
-    if (!editContent || !editDate || !editAssigneeId) {
-      alert('担当者・業務内容・完了日を入力してください');
+    if (!editContent || !editDate) {
+      alert('業務内容・完了日を入力してください');
       return;
     }
     const all = getMemberTasks().map(t => t.id === task.id ? {
@@ -873,9 +888,10 @@ function MemberTaskRow({
       <div className="bg-yellow-50 rounded-xl border border-yellow-200 p-4 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div>
-            <label className="block text-[10px] font-semibold text-gray-600 mb-1">担当者</label>
+            <label className="block text-[10px] font-semibold text-gray-600 mb-1">担当者（任意）</label>
             <select value={editAssigneeId} onChange={e => setEditAssigneeId(e.target.value)}
               className="w-full border rounded px-2 py-1 text-xs">
+              <option value="">未割当</option>
               {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
@@ -952,7 +968,7 @@ function MemberTaskRow({
           </div>
           {/* Meta row */}
           <div className="flex flex-wrap gap-3 text-xs text-gray-600">
-            <span className="font-semibold text-purple-700">👤 {assignee?.name || '不明'}</span>
+            <span className="font-semibold text-purple-700">👤 {assignee?.name || '未割当'}</span>
             <span>📅 完了予定: <b className={isOverdue ? 'text-red-600' : ''}>{task.plannedCompletionDate}</b></span>
             <span className="text-gray-400">登録: {creator?.name || '不明'} / {new Date(task.createdAt).toLocaleDateString('ja-JP', { month: '2-digit', day: '2-digit' })}</span>
             {task.completedAt && (
