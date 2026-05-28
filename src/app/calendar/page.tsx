@@ -6,6 +6,37 @@ import { useAppContext, getMonthlySchedules, setMonthlySchedules, getTaskDefinit
 import type { FixedTaskDefault } from '@/lib/store';
 import type { MonthlySchedule, TaskDefinition } from '@/lib/types';
 
+// === OL 担当割当（週ごと・Mon-Friに表示） ===
+// keyは月曜の日付 (YYYY-MM-DD)。指定週は明示、それ以外は均等になるよう配分。
+// 各メンバーの担当週数: 和田=3 / 潮田=2 / 国兼=3 / 熊谷=3 / 鈴木=3
+const OL_ASSIGNMENTS: Record<string, string[]> = {
+  '2026-05-18': ['熊谷', '鈴木'],
+  '2026-05-25': ['潮田', '国兼'],
+  '2026-06-01': ['熊谷', '和田'],
+  '2026-06-08': ['国兼', '潮田'],
+  '2026-06-15': ['鈴木', '和田'],
+  '2026-06-22': ['熊谷', '鈴木'],
+  '2026-06-29': ['和田', '国兼'],
+};
+
+function getMondayOfWeek(year: number, month: number, day: number): string {
+  const d = new Date(year, month, day);
+  const dow = d.getDay(); // 0=Sun, 1=Mon, ...
+  const shift = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + shift);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const da = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${da}`;
+}
+
+function getOLForDay(year: number, month: number, day: number, dayOfWeek: number): string[] {
+  // Mon-Fri (1-5) のみ表示。土日は表示しない。
+  if (dayOfWeek === 0 || dayOfWeek === 6) return [];
+  const mondayKey = getMondayOfWeek(year, month, day);
+  return OL_ASSIGNMENTS[mondayKey] || [];
+}
+
 export default function CalendarPage() {
   const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth());
@@ -152,6 +183,7 @@ export default function CalendarPage() {
               const daySchedules = getSchedulesForDay(day);
               const isToday = new Date().getDate() === day && new Date().getMonth() === month && new Date().getFullYear() === year;
 
+              const olMembers = getOLForDay(year, month, day, dayOfWeek);
               return (
                 <DayCell
                   key={day}
@@ -160,6 +192,7 @@ export default function CalendarPage() {
                   isToday={isToday}
                   schedules={daySchedules}
                   tasksByCategory={tasksByCategory}
+                  olMembers={olMembers}
                   onAdd={(taskName) => handleAddSchedule(day, taskName)}
                   onRemove={handleRemoveSchedule}
                   onCopy={() => handleCopyDay(day)}
@@ -177,13 +210,14 @@ export default function CalendarPage() {
 }
 
 function DayCell({
-  day, dayOfWeek, isToday, schedules, tasksByCategory, onAdd, onRemove, onCopy, onPaste, isCopied, onReloadTasks
+  day, dayOfWeek, isToday, schedules, tasksByCategory, olMembers, onAdd, onRemove, onCopy, onPaste, isCopied, onReloadTasks
 }: {
   day: number;
   dayOfWeek: number;
   isToday: boolean;
   schedules: MonthlySchedule[];
   tasksByCategory: Record<string, TaskDefinition[]>;
+  olMembers: string[];
   onAdd: (taskName: string) => void;
   onRemove: (id: string) => void;
   onCopy: () => void;
@@ -253,6 +287,12 @@ function DayCell({
           dayOfWeek === 0 ? 'text-red-500' :
           dayOfWeek === 6 ? 'text-blue-500' : 'text-gray-700'
         }`}>{day}</span>
+        {olMembers.length > 0 && (
+          <span
+            className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-cyan-100 text-cyan-800 border border-cyan-300"
+            title={`今週のOL担当: ${olMembers.join('・')}`}
+          >🔄 OL: {olMembers.join('・')}</span>
+        )}
         <div className="opacity-0 group-hover:opacity-100 transition-opacity flex gap-0.5">
           {schedules.length > 0 && (
             <button onClick={onCopy} className="text-blue-500 hover:bg-blue-100 rounded p-0.5" title="コピー">
