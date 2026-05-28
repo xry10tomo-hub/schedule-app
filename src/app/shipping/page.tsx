@@ -56,9 +56,10 @@ export default function ShippingPage() {
     if (toCarry.length === 0) return;
 
     // Move: add to today, DELETE from yesterday (per user request: 持ち越した側の残りは消す)
+    // ID は決定的に生成 → 複数PCが同時に持ち越しても同じIDになり、merge時に重複しない
     const toAdd: ShippingRecord[] = toCarry.map(r => ({
       ...r,
-      id: generateId(),
+      id: `carry-${selectedDate}-${r.id}`,
       date: selectedDate,
       createdAt: new Date().toISOString(),
       carriedOver: true,
