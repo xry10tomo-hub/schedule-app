@@ -358,6 +358,8 @@ export default function HomePage() {
         const [h, m] = scheduled.split(':').map(Number);
         const thresholdMin = h * 60 + m + 1; // 予定時刻 + 1分
         if (currentMinutes < thresholdMin) continue;
+        // アラート表示は開始から30分間のみ（予定時刻+1分 〜 予定時刻+31分）
+        if (currentMinutes > thresholdMin + 30) continue;
 
         const rows = tasks.filter(t => t.taskName === taskName);
         if (rows.length === 0) continue;
