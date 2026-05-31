@@ -148,92 +148,40 @@ export default function AdminPage() {
     }
 
     // For each task and each day, compute the value
-    const data: Record<string, Record<number, { minutes: number; count: number; points: number; shippingPoints: number; isEstimate?: boolean }>> = {};
+    const data: Record<string, Record<number, { minutes: number; count: number; points: number; shippingPoints: number }>> = {};
     for (const tn of taskNames) {
       data[tn] = {};
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
-        let isEstimate = false;
 
-        // ===== メンバー単位で集計（取りこぼし防止） =====
-        // 各メンバーごとに「ホーム入力 優先 → 無ければ DailyTask」を判定し、全員分を合算する。
-        // 旧仕様: 全体合算後にフォールバック判定 → ホーム入力した人がいると他人の DailyTask が無視される
-        type MemberAgg = { minutes: number; count: number; points: number; shippingPoints: number };
-        const perMember: Record<string, MemberAgg> = {};
-        function bucket(memberId: string): MemberAgg {
-          if (!perMember[memberId]) perMember[memberId] = { minutes: 0, count: 0, points: 0, shippingPoints: 0 };
-          return perMember[memberId];
-        }
+        // ===== ホーム画面の情報のみを集計 =====
+        // 集計対象: ① 実績タイムライン（15分ブロック） + ② 実績入力欄（件数・点数・郵送点数）
+        // それ以外（DailyTask.actualMinutes/Count/Points 等）は使わない。
+        // ホームに入力がない業務・日は 0 のまま積み上げない。
+        let minutes = 0, count = 0, points = 0, shippingPoints = 0;
 
-        // ① ホーム実績タイムライン (15分×ブロック) — メンバー別に集計
+        // ① ホーム実績タイムライン (15分×ブロック)
         const dateActualTl = monthData.allActualTl[dateStr] || {};
         Object.entries(dateActualTl).forEach(([memberId, blocks]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
-          let memberMins = 0;
           Object.values(blocks).forEach(blockTaskName => {
-            if (blockTaskName === tn) memberMins += 15;
+            if (blockTaskName === tn) minutes += 15;
           });
-          if (memberMins > 0) bucket(memberId).minutes += memberMins;
         });
 
-        // ② ホーム実績入力 (件数・点数・郵送点数) — メンバー別に集計
+        // ② ホーム実績入力 (件数・点数・郵送点数)
         const datePerf = monthData.allPerf[dateStr] || {};
         Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
           const entry = taskPerfs[tn];
           if (entry) {
-            const b = bucket(memberId);
-            b.count += entry.count || 0;
-            b.points += entry.points || 0;
-            b.shippingPoints += (entry as { shippingPoints?: number }).shippingPoints || 0;
+            count += entry.count || 0;
+            points += entry.points || 0;
+            shippingPoints += (entry as { shippingPoints?: number }).shippingPoints || 0;
           }
         });
 
-        // ③ DailyTask フォールバック — そのメンバー(assignee)にホーム入力が「ない欄」のみ補完
-        allTasks.forEach(t => {
-          if (t.taskName !== tn || t.date !== dateStr) return;
-          if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
-          const aid = t.assigneeId || `__unassigned_${t.id}`;
-          const b = bucket(aid);
-          // minutes: そのメンバーの実績タイムラインが空なら DailyTask の値を使う
-          if (b.minutes === 0) b.minutes += t.actualMinutes || 0;
-          // count: そのメンバーのホーム件数が0なら DailyTask の値を使う
-          if (b.count === 0) b.count += t.actualCount || 0;
-          // points: そのメンバーのホーム点数が0なら DailyTask の値を使う
-          if (b.points === 0) b.points += t.actualPoints || 0;
-        });
-
-        // 合算（全員分）
-        let minutes = 0, count = 0, points = 0, shippingPoints = 0;
-        Object.values(perMember).forEach(b => {
-          minutes += b.minutes;
-          count += b.count;
-          points += b.points;
-          shippingPoints += b.shippingPoints;
-        });
-
-        // ⑤ 実績時間が0で件数/点数がある場合 → 件数 × 個人スピードで推定（過去データ消失の救済）
-        if (minutes === 0 && (count > 0 || points > 0)) {
-          const datePerf = monthData.allPerf[dateStr] || {};
-          const usePoints = POINTS_BASED_SPEED_TASKS.includes(tn);
-          let estMins = 0;
-          Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
-            if (selectedMemberId && memberId !== selectedMemberId) return;
-            const entry = taskPerfs[tn];
-            if (!entry) return;
-            const member = members.find(mb => mb.id === memberId);
-            const speed = member?.speedRatings?.[tn] || 0;
-            if (speed <= 0) return;
-            const qty = usePoints ? (entry.points || 0) : (entry.count || 0);
-            estMins += qty * speed;
-          });
-          if (estMins > 0) {
-            minutes = Math.round(estMins);
-            isEstimate = true;
-          }
-        }
-
-        data[tn][d] = { minutes, count, points, shippingPoints, isEstimate };
+        data[tn][d] = { minutes, count, points, shippingPoints };
       }
     }
     return { taskNames, data };
@@ -497,7 +445,7 @@ export default function AdminPage() {
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
           <h3 className="text-sm font-bold text-gray-700 mb-1">業務 × 日別 マトリックス（4指標同時表示）</h3>
           <p className="text-[10px] text-gray-500 mb-3">
-            <span className="italic opacity-60">数値*</span> は推定値（件数×個人スピード設定）。実績タイムライン未記録の日のため、件数とスピード設定から逆算しています。
+            集計対象は<strong>ホーム画面</strong>の入力（実績タイムライン + 件数・点数・郵送点数）のみ。ホーム未入力の業務・日は積み上がりません。
           </p>
           <div className="overflow-x-auto max-h-[75vh] overflow-y-auto">
             <table className="text-[11px] border-collapse">
@@ -543,15 +491,12 @@ export default function AdminPage() {
                         </td>
                         {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(d => {
                           const v = formatCellByMetric(tn, d, m);
-                          const cell = matrix.data[tn]?.[d];
-                          const isEst = !!cell?.isEstimate && (m === 'minutes' || m === 'speed');
                           return (
                             <td
                               key={d}
-                              className={`border border-gray-100 px-1 py-1 text-center ${METRIC_TEXT[m]} ${isEst ? 'italic opacity-60' : ''}`}
-                              title={isEst ? '推定値（件数×個人スピード設定）' : undefined}
+                              className={`border border-gray-100 px-1 py-1 text-center ${METRIC_TEXT[m]}`}
                             >
-                              {v}{isEst && v ? '*' : ''}
+                              {v}
                             </td>
                           );
                         })}
