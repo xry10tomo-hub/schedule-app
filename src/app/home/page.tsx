@@ -370,7 +370,11 @@ export default function HomePage() {
         });
         const dailyActual = rows.reduce((s, t) => s + (t.actualCount || 0), 0);
         const someoneCompleted = rows.some(t => t.status === 'completed');
-        if (someoneCompleted || totalActualCount > 0 || dailyActual > 0) continue;
+        // 担当者がホーム画面の実績タイムラインにこの業務を1ブロックでも塗っていたらアラート消去
+        const timelinePainted = Object.values(actualTimelineData || {}).some(memberBlocks =>
+          Object.values(memberBlocks || {}).some(blockTaskName => blockTaskName === taskName)
+        );
+        if (someoneCompleted || totalActualCount > 0 || dailyActual > 0 || timelinePainted) continue;
 
         // この日に既に閉じられたアラートは表示しない
         const dismissKey = `${todayStr}-${taskName}`;
@@ -398,7 +402,7 @@ export default function HomePage() {
     check();
     const interval = setInterval(check, 60_000);
     return () => clearInterval(interval);
-  }, [selectedDate, tasks, performanceData, dismissedAlerts]);
+  }, [selectedDate, tasks, performanceData, actualTimelineData, dismissedAlerts]);
 
   // ×ボタンでアラートを消す
   function dismissAlert(taskName: string) {

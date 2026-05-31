@@ -89,6 +89,32 @@ export default function CalendarPage() {
     loadSchedules();
   }
 
+  // 期間指定で一括追加（プルダウン・直接入力 両対応）
+  function handleAddScheduleRange(startDay: number, endDay: number, taskName: string) {
+    if (!taskName) return;
+    const minDay = Math.min(startDay, endDay);
+    const maxDay = Math.min(daysInMonth, Math.max(startDay, endDay));
+    const existing = getMonthlySchedules();
+    const newSchedules = [...existing];
+    let addedCount = 0;
+    for (let d = minDay; d <= maxDay; d++) {
+      const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
+      if (newSchedules.some(s => s.date === dateStr && s.taskName === taskName)) continue;
+      newSchedules.push({
+        id: generateId(),
+        memberId: '',
+        date: dateStr,
+        taskName,
+        plannedHours: 1,
+      });
+      addedCount++;
+    }
+    if (addedCount > 0) {
+      setMonthlySchedules(newSchedules);
+      loadSchedules();
+    }
+  }
+
   function handleRemoveSchedule(id: string) {
     const updated = getMonthlySchedules().filter(s => s.id !== id);
     setMonthlySchedules(updated);
@@ -189,12 +215,14 @@ export default function CalendarPage() {
                 <DayCell
                   key={day}
                   day={day}
+                  daysInMonth={daysInMonth}
                   dayOfWeek={dayOfWeek}
                   isToday={isToday}
                   schedules={daySchedules}
                   tasksByCategory={tasksByCategory}
                   olMembers={olMembers}
                   onAdd={(taskName) => handleAddSchedule(day, taskName)}
+                  onAddRange={(taskName, endDay) => handleAddScheduleRange(day, endDay, taskName)}
                   onRemove={handleRemoveSchedule}
                   onCopy={() => handleCopyDay(day)}
                   onPaste={copiedDay !== null ? () => handlePasteDay(day) : undefined}
@@ -211,15 +239,17 @@ export default function CalendarPage() {
 }
 
 function DayCell({
-  day, dayOfWeek, isToday, schedules, tasksByCategory, olMembers, onAdd, onRemove, onCopy, onPaste, isCopied, onReloadTasks
+  day, daysInMonth, dayOfWeek, isToday, schedules, tasksByCategory, olMembers, onAdd, onAddRange, onRemove, onCopy, onPaste, isCopied, onReloadTasks
 }: {
   day: number;
+  daysInMonth: number;
   dayOfWeek: number;
   isToday: boolean;
   schedules: MonthlySchedule[];
   tasksByCategory: Record<string, TaskDefinition[]>;
   olMembers: string[];
   onAdd: (taskName: string) => void;
+  onAddRange: (taskName: string, endDay: number) => void;
   onRemove: (id: string) => void;
   onCopy: () => void;
   onPaste?: () => void;
@@ -229,6 +259,7 @@ function DayCell({
   const [showForm, setShowForm] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [formTask, setFormTask] = useState('');
+  const [formEndDay, setFormEndDay] = useState<number>(day);
   const [expandedChipId, setExpandedChipId] = useState<string | null>(null);
   const [showTaskManager, setShowTaskManager] = useState(false);
   const [newTaskName, setNewTaskName] = useState('');
@@ -273,8 +304,13 @@ function DayCell({
   }
 
   function handleSubmit() {
-    onAdd(formTask);
+    if (formEndDay !== day) {
+      onAddRange(formTask, formEndDay);
+    } else {
+      onAdd(formTask);
+    }
     setFormTask('');
+    setFormEndDay(day);
     setShowForm(false);
   }
 
@@ -381,6 +417,39 @@ function DayCell({
             className="w-full text-xs border rounded px-2 py-1.5"
             onKeyDown={e => { if (e.key === 'Enter' && formTask) handleSubmit(); }}
           />
+          {/* 期間指定（同月内） */}
+          <div className="bg-blue-50 border border-blue-200 rounded px-2 py-1.5 space-y-1">
+            <p className="text-[10px] font-semibold text-blue-700">📅 期間指定で一括登録（同月内）</p>
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-gray-600">{day}日</span>
+              <span className="text-gray-400">〜</span>
+              <input
+                type="number"
+                min={day}
+                max={daysInMonth}
+                value={formEndDay}
+                onChange={e => {
+                  const v = Number(e.target.value);
+                  if (!Number.isNaN(v)) setFormEndDay(Math.max(day, Math.min(daysInMonth, v)));
+                }}
+                className="w-14 border rounded px-1 py-0.5 text-xs text-center"
+              />
+              <span className="text-gray-600">日</span>
+              <button
+                onClick={() => setFormEndDay(daysInMonth)}
+                className="ml-1 text-[10px] text-blue-600 hover:underline"
+                title="月末まで"
+              >月末</button>
+              <button
+                onClick={() => setFormEndDay(day)}
+                className="text-[10px] text-gray-500 hover:underline"
+                title="当日のみ"
+              >当日のみ</button>
+            </div>
+            {formEndDay !== day && (
+              <p className="text-[10px] text-blue-700">→ {day}日 〜 {formEndDay}日 の <strong>{formEndDay - day + 1}日間</strong>に同じ業務を一括追加</p>
+            )}
+          </div>
           <div className="flex gap-1">
             <button onClick={handleSubmit} disabled={!formTask} className="flex-1 bg-green-600 text-white text-xs rounded px-2 py-1 disabled:opacity-50">追加</button>
             <button onClick={() => setShowForm(false)} className="flex-1 bg-gray-200 text-gray-600 text-xs rounded px-2 py-1">閉じる</button>
