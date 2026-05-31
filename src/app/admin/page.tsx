@@ -153,48 +153,64 @@ export default function AdminPage() {
       data[tn] = {};
       for (let d = 1; d <= daysInMonth; d++) {
         const dateStr = `${monthStr}-${String(d).padStart(2, '0')}`;
-        let minutes = 0, count = 0, points = 0, shippingPoints = 0;
         let isEstimate = false;
 
-        // ① 実績タイムラインブロック（15分/ブロック）
+        // ===== メンバー単位で集計（取りこぼし防止） =====
+        // 各メンバーごとに「ホーム入力 優先 → 無ければ DailyTask」を判定し、全員分を合算する。
+        // 旧仕様: 全体合算後にフォールバック判定 → ホーム入力した人がいると他人の DailyTask が無視される
+        type MemberAgg = { minutes: number; count: number; points: number; shippingPoints: number };
+        const perMember: Record<string, MemberAgg> = {};
+        function bucket(memberId: string): MemberAgg {
+          if (!perMember[memberId]) perMember[memberId] = { minutes: 0, count: 0, points: 0, shippingPoints: 0 };
+          return perMember[memberId];
+        }
+
+        // ① ホーム実績タイムライン (15分×ブロック) — メンバー別に集計
         const dateActualTl = monthData.allActualTl[dateStr] || {};
         Object.entries(dateActualTl).forEach(([memberId, blocks]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
+          let memberMins = 0;
           Object.values(blocks).forEach(blockTaskName => {
-            if (blockTaskName === tn) minutes += 15;
+            if (blockTaskName === tn) memberMins += 15;
           });
+          if (memberMins > 0) bucket(memberId).minutes += memberMins;
         });
 
-        // ② タイムライン未記録の場合: DailyTask.actualMinutes（日次入力画面の実績）を使用
-        if (minutes === 0) {
-          allTasks.forEach(t => {
-            if (t.taskName !== tn || t.date !== dateStr) return;
-            if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
-            minutes += t.actualMinutes || 0;
-          });
-        }
-
-        // ③ ホーム画面の実績入力（件数・点数・郵送点数）
+        // ② ホーム実績入力 (件数・点数・郵送点数) — メンバー別に集計
         const datePerf = monthData.allPerf[dateStr] || {};
         Object.entries(datePerf).forEach(([memberId, taskPerfs]) => {
           if (selectedMemberId && memberId !== selectedMemberId) return;
           const entry = taskPerfs[tn];
           if (entry) {
-            count += entry.count || 0;
-            points += entry.points || 0;
-            shippingPoints += (entry as { shippingPoints?: number }).shippingPoints || 0;
+            const b = bucket(memberId);
+            b.count += entry.count || 0;
+            b.points += entry.points || 0;
+            b.shippingPoints += (entry as { shippingPoints?: number }).shippingPoints || 0;
           }
         });
 
-        // ④ ホーム画面未入力の場合: DailyTask.actualCount / actualPoints（日次入力画面の実績）を使用
-        if (count === 0 && points === 0) {
-          allTasks.forEach(t => {
-            if (t.taskName !== tn || t.date !== dateStr) return;
-            if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
-            count += t.actualCount || 0;
-            points += t.actualPoints || 0;
-          });
-        }
+        // ③ DailyTask フォールバック — そのメンバー(assignee)にホーム入力が「ない欄」のみ補完
+        allTasks.forEach(t => {
+          if (t.taskName !== tn || t.date !== dateStr) return;
+          if (selectedMemberId && t.assigneeId !== selectedMemberId) return;
+          const aid = t.assigneeId || `__unassigned_${t.id}`;
+          const b = bucket(aid);
+          // minutes: そのメンバーの実績タイムラインが空なら DailyTask の値を使う
+          if (b.minutes === 0) b.minutes += t.actualMinutes || 0;
+          // count: そのメンバーのホーム件数が0なら DailyTask の値を使う
+          if (b.count === 0) b.count += t.actualCount || 0;
+          // points: そのメンバーのホーム点数が0なら DailyTask の値を使う
+          if (b.points === 0) b.points += t.actualPoints || 0;
+        });
+
+        // 合算（全員分）
+        let minutes = 0, count = 0, points = 0, shippingPoints = 0;
+        Object.values(perMember).forEach(b => {
+          minutes += b.minutes;
+          count += b.count;
+          points += b.points;
+          shippingPoints += b.shippingPoints;
+        });
 
         // ⑤ 実績時間が0で件数/点数がある場合 → 件数 × 個人スピードで推定（過去データ消失の救済）
         if (minutes === 0 && (count > 0 || points > 0)) {
