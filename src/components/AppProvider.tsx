@@ -199,9 +199,17 @@ export default function AppProvider({ children }: { children: React.ReactNode })
           try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
           const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
           const mergedStr = JSON.stringify(merged);
+          const remoteStr = JSON.stringify(remoteData);
           if (mergedStr !== localRaw) {
             localStorage.setItem(key, mergedStr);
             setDataVersion(v => v + 1);
+          }
+          // BUG FIX: If merge produced data beyond what's on remote (= local had unique entries
+          // that Firestore lost in a previous race), push the merged result back so Firestore
+          // converges to "everyone's data combined" instead of "last writer's view".
+          if (mergedStr !== remoteStr) {
+            setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() })
+              .catch(err => console.warn(`[Firestore] write-back merge failed for "${key}":`, err));
           }
         } else {
           // Shared data: apply remote as the truth. Re-render only if value changed.
@@ -246,9 +254,14 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         if (PER_USER_NESTED_KEYS.has(key)) {
           const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
           const mergedStr = JSON.stringify(merged);
+          const remoteStr = JSON.stringify(remoteData);
           if (mergedStr !== localRaw) {
             localStorage.setItem(key, mergedStr);
             changed = true;
+          }
+          // BUG FIX: write merged back to Firestore so it converges to the union of all PCs' edits
+          if (mergedStr !== remoteStr) {
+            await setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() });
           }
         } else {
           const remoteStr = JSON.stringify(remoteData);
