@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
-import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, getTaskDefinitions, setTaskDefinitions, generateId, calculateDailySummary, getCategoryTaskColor, getHandovers, setHandovers, getMemberById, CATEGORY_COLORS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
+import { useAppContext, getDailyTasks, getShippingRecords, getShifts, getTimelineForDate, getActualTimelineForDate, setActualTimelineForDate, getActualPerformanceForDate, setActualPerformanceForDate, updateMyActualPerformanceEntry, updateMyActualTimelineBlock, getTaskDefinitions, setTaskDefinitions, generateId, calculateDailySummary, getCategoryTaskColor, getHandovers, setHandovers, getMemberById, CATEGORY_COLORS, TASK_CATEGORIES, fmtNum } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { DailyTask, ShippingRecord, ShiftEntry, TaskDefinition, HandoverRequest } from '@/lib/types';
 
@@ -126,14 +126,17 @@ export default function HomePage() {
     return performanceData[currentUserId]?.[taskName] || null;
   }
 
-  // Save performance entry for a specific field
+  // Save performance entry for a specific field — uses field-path Firestore update
+  // so other users' data is NEVER overwritten (race-condition free).
   function saveMyPerformance(taskName: string, field: 'count' | 'points' | 'shippingPoints', value: number) {
     const newData = { ...performanceData };
     if (!newData[currentUserId]) newData[currentUserId] = {};
     if (!newData[currentUserId][taskName]) newData[currentUserId][taskName] = { count: 0, points: 0 };
     newData[currentUserId][taskName][field] = value;
     setPerformanceData(newData);
-    setActualPerformanceForDate(selectedDate, newData);
+    // 自分のユーザーIDのこの業務のエントリだけをFirestoreに部分更新
+    updateMyActualPerformanceEntry(selectedDate, currentUserId, taskName, newData[currentUserId][taskName])
+      .catch(err => console.error('[Home] saveMyPerformance Firestore error:', err));
   }
 
   // Handover handlers
@@ -251,16 +254,20 @@ export default function HomePage() {
     if (!selectedPaintTask || !currentUserId) return;
     const memberBlocks = { ...(actualTimelineData[currentUserId] || {}) };
     const key = String(blockIndex);
+    let removed = false;
     if (memberBlocks[key] === selectedPaintTask) {
       delete memberBlocks[key];
       setDragMode('remove');
+      removed = true;
     } else {
       memberBlocks[key] = selectedPaintTask;
       setDragMode('add');
     }
     const newData = { ...actualTimelineData, [currentUserId]: memberBlocks };
     setActualTimelineData(newData);
-    setActualTimelineForDate(selectedDate, newData);
+    // 自分の該当ブロックだけFirestoreに部分更新（他人のデータには触れない）
+    updateMyActualTimelineBlock(selectedDate, currentUserId, key, removed ? null : selectedPaintTask)
+      .catch(err => console.error('[Home] timeline paint Firestore error:', err));
     setIsDragging(true);
   }
 
@@ -285,7 +292,8 @@ export default function HomePage() {
     }
     const newData = { ...actualTimelineData, [currentUserId]: memberBlocks };
     setActualTimelineData(newData);
-    setActualTimelineForDate(selectedDate, newData);
+    updateMyActualTimelineBlock(selectedDate, currentUserId, key, dragMode === 'remove' ? null : selectedPaintTask)
+      .catch(err => console.error('[Home] timeline drag Firestore error:', err));
   }
 
   function handleMouseUp() {

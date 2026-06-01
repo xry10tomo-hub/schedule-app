@@ -40,9 +40,68 @@ function mergeArraysById(localData: unknown, remoteData: unknown): unknown[] | n
   return Array.from(merged.values());
 }
 import { db } from '@/lib/firebase';
-import { doc, onSnapshot, getDoc, setDoc } from 'firebase/firestore';
+import { doc, onSnapshot, getDoc, setDoc, updateDoc } from 'firebase/firestore';
 import { ensureDailyBackup } from '@/lib/backup';
 import type { Member } from '@/lib/types';
+
+// Per-user 3階層データ（actualPerformance / actualTimeline）の差分を
+// Firestore のフィールドパス更新マップに変換するヘルパー。
+// 構造: Record<date, Record<memberId, Record<taskName|blockIdx, value>>>
+// LOCAL と REMOTE を比較し、leaf レベルで違う or LOCAL にしかないエントリだけを抽出。
+// 戻り値の例: { 'value.2026-05-29.kunigane.【LINE】画像査定': {count, points}, ... }
+function buildPerUserFieldUpdates(
+  local: unknown,
+  remote: unknown,
+): Record<string, unknown> {
+  const updates: Record<string, unknown> = {};
+  if (typeof local !== 'object' || local === null) return updates;
+  const localObj = local as Record<string, Record<string, Record<string, unknown>>>;
+  const remoteObj = (typeof remote === 'object' && remote !== null)
+    ? (remote as Record<string, Record<string, Record<string, unknown>>>)
+    : {};
+  for (const [date, localMembers] of Object.entries(localObj)) {
+    if (typeof localMembers !== 'object' || localMembers === null) continue;
+    const remoteMembers = remoteObj[date] || {};
+    for (const [memberId, localLeaves] of Object.entries(localMembers)) {
+      if (typeof localLeaves !== 'object' || localLeaves === null) continue;
+      const remoteLeaves = remoteMembers[memberId] || {};
+      for (const [leafKey, localValue] of Object.entries(localLeaves)) {
+        const remoteValue = remoteLeaves[leafKey];
+        // leaf値が違う or remote に無い場合だけ書き戻し対象
+        if (JSON.stringify(localValue) !== JSON.stringify(remoteValue)) {
+          updates[`value.${date}.${memberId}.${leafKey}`] = localValue;
+        }
+      }
+    }
+  }
+  return updates;
+}
+
+// 「他人のデータに絶対に触れない」write-back 関数。
+// updateDoc + フィールドパスで差分のみ書き込む（全体上書きはしない）。
+// ドキュメント未存在の場合のみ、最終フォールバックとして setDoc を1回実行。
+async function writeBackPerUserDiff(
+  key: string,
+  merged: unknown,
+  remote: unknown,
+): Promise<void> {
+  const updates = buildPerUserFieldUpdates(merged, remote);
+  if (Object.keys(updates).length === 0) return; // 差分なし
+  try {
+    await updateDoc(doc(db, 'appData', key), {
+      ...updates,
+      updatedAt: Date.now(),
+    });
+  } catch (err) {
+    // 通常はドキュメント未存在エラー。その場合のみ初回 setDoc を実行
+    try {
+      await setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() });
+    } catch (err2) {
+      console.warn(`[Firestore] writeBackPerUserDiff fallback failed for "${key}":`, err2);
+    }
+    void err;
+  }
+}
 
 export default function AppProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -205,11 +264,11 @@ export default function AppProvider({ children }: { children: React.ReactNode })
             setDataVersion(v => v + 1);
           }
           // BUG FIX: If merge produced data beyond what's on remote (= local had unique entries
-          // that Firestore lost in a previous race), push the merged result back so Firestore
-          // converges to "everyone's data combined" instead of "last writer's view".
+          // that Firestore lost in a previous race), push only the differing field-paths so other
+          // users' data is NEVER touched. updateDoc with dot-notation paths guarantees per-leaf isolation.
           if (mergedStr !== remoteStr) {
-            setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() })
-              .catch(err => console.warn(`[Firestore] write-back merge failed for "${key}":`, err));
+            writeBackPerUserDiff(key, merged, remoteData)
+              .catch(err => console.warn(`[Firestore] write-back diff failed for "${key}":`, err));
           }
         } else {
           // Shared data: apply remote as the truth. Re-render only if value changed.
@@ -259,9 +318,10 @@ export default function AppProvider({ children }: { children: React.ReactNode })
             localStorage.setItem(key, mergedStr);
             changed = true;
           }
-          // BUG FIX: write merged back to Firestore so it converges to the union of all PCs' edits
+          // BUG FIX: write merged back to Firestore so it converges to the union of all PCs' edits.
+          // 差分のみフィールドパスで更新 → 他人のデータには絶対に触れない。
           if (mergedStr !== remoteStr) {
-            await setDoc(doc(db, 'appData', key), { value: merged, updatedAt: Date.now() });
+            await writeBackPerUserDiff(key, merged, remoteData);
           }
         } else {
           const remoteStr = JSON.stringify(remoteData);

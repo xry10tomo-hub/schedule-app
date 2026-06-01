@@ -2,7 +2,7 @@
 
 import { createContext, useContext } from 'react';
 import { db } from './firebase';
-import { doc, setDoc } from 'firebase/firestore';
+import { doc, setDoc, updateDoc } from 'firebase/firestore';
 import type {
   Member,
   DailyTask,
@@ -792,6 +792,77 @@ export function setActualPerformanceForDate(date: string, data: Record<string, R
   const all = getActualPerformanceAll();
   all[date] = data;
   setActualPerformanceAll(all);
+}
+
+// ⭐ レース無し書込み: 自分のユーザーIDの該当業務エントリだけをFirestoreにフィールド更新
+// 他のユーザーのデータには絶対に触れない（updateDocはフィールドパスで部分更新する）
+export async function updateMyActualPerformanceEntry(
+  date: string,
+  userId: string,
+  taskName: string,
+  entry: ActualPerformanceEntry,
+): Promise<void> {
+  // 1) ローカルストレージ更新（即時UI反映用）
+  const all = getActualPerformanceAll();
+  if (!all[date]) all[date] = {};
+  if (!all[date][userId]) all[date][userId] = {};
+  all[date][userId][taskName] = entry;
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.actualPerformance, JSON.stringify(all));
+  }
+  // 2) Firestoreは「フィールドパス」で部分更新（他人のデータを触らない）
+  try {
+    await updateDoc(doc(db, 'appData', STORAGE_KEYS.actualPerformance), {
+      [`value.${date}.${userId}.${taskName}`]: entry,
+      updatedAt: Date.now(),
+    });
+  } catch {
+    // ドキュメント未作成等の場合は setDoc でフォールバック
+    await setDoc(doc(db, 'appData', STORAGE_KEYS.actualPerformance), {
+      value: all,
+      updatedAt: Date.now(),
+    });
+  }
+}
+
+// ⭐ 同じく実績タイムライン用: 自分のユーザーの該当ブロックだけ部分更新
+export async function updateMyActualTimelineBlock(
+  date: string,
+  userId: string,
+  blockIndex: string,
+  taskName: string | null,  // null = ブロック削除
+): Promise<void> {
+  const all = getActualTimelineBlocks();
+  if (!all[date]) all[date] = {};
+  if (!all[date][userId]) all[date][userId] = {};
+  if (taskName === null) {
+    delete all[date][userId][blockIndex];
+  } else {
+    all[date][userId][blockIndex] = taskName;
+  }
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.actualTimeline, JSON.stringify(all));
+  }
+  try {
+    if (taskName === null) {
+      // Firestoreの該当フィールドだけ削除
+      const { deleteField } = await import('firebase/firestore');
+      await updateDoc(doc(db, 'appData', STORAGE_KEYS.actualTimeline), {
+        [`value.${date}.${userId}.${blockIndex}`]: deleteField(),
+        updatedAt: Date.now(),
+      });
+    } else {
+      await updateDoc(doc(db, 'appData', STORAGE_KEYS.actualTimeline), {
+        [`value.${date}.${userId}.${blockIndex}`]: taskName,
+        updatedAt: Date.now(),
+      });
+    }
+  } catch {
+    await setDoc(doc(db, 'appData', STORAGE_KEYS.actualTimeline), {
+      value: all,
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 // ============ Handover Requests ============
