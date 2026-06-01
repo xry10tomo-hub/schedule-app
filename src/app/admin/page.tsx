@@ -44,11 +44,34 @@ function metricsForTask(taskName: string): Metric[] {
 }
 
 export default function AdminPage() {
-  const { members, dataVersion } = useAppContext();
+  const { members, dataVersion, forceRefresh } = useAppContext();
   const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth());
   const [selectedMemberId, setSelectedMemberId] = useState<string>('');
   const [showAllTasks, setShowAllTasks] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<number | null>(null);
+
+  // 入力直後の数値が他PCに反映されるよう、画面オープン時 & 1分毎にFirestoreから強制取得
+  useEffect(() => {
+    forceRefresh();
+    setLastSyncAt(Date.now());
+    const id = setInterval(() => {
+      forceRefresh();
+      setLastSyncAt(Date.now());
+    }, 60_000);
+    return () => clearInterval(id);
+  }, [forceRefresh]);
+
+  async function handleManualSync() {
+    setSyncing(true);
+    try {
+      await forceRefresh();
+      setLastSyncAt(Date.now());
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   // Priority tasks - shown by default in 集計
   const PRIORITY_TASKS = [
@@ -394,7 +417,18 @@ export default function AdminPage() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
           <h1 className="text-2xl font-bold text-gray-800">📊 集計</h1>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              onClick={handleManualSync}
+              disabled={syncing}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50"
+              title="全PCの最新データをFirestoreから取得します"
+            >
+              {syncing ? '⏳ 同期中…' : '🔄 最新データに同期'}
+            </button>
+            {lastSyncAt && (
+              <span className="text-[10px] text-gray-500">最終同期: {new Date(lastSyncAt).toLocaleTimeString('ja-JP')}</span>
+            )}
             <button onClick={handleExport} className="bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium">CSV出力</button>
             <button onClick={handleExportSalesCall} className="bg-orange-50 border border-orange-300 hover:bg-orange-100 text-orange-700 px-4 py-2 rounded-lg text-sm font-medium">📞 商材追い電話CSV</button>
           </div>

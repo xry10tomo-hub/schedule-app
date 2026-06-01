@@ -404,9 +404,38 @@ export default function AutoAssignPage() {
 
     const result = runAutoAssignAlgorithm(tasks, activeMembers, shiftsForDate, breakSlots);
     setPreviewTimeline(result);
-    setApplied(false);
 
-    // Check for unassigned tasks
+    // 一括反映: タイムライン + 日次業務入力の assigneeId を即座に更新
+    setTimelineForDate(date, result);
+
+    // 日次タスクに assigneeId を反映（最も多く担当したメンバーに割当）
+    const allDailyTasks = getDailyTasks();
+    const taskAssigneeMap: Record<string, Set<string>> = {};
+    Object.entries(result).forEach(([memberId, blocks]) => {
+      Object.values(blocks).forEach(taskName => {
+        if (!taskAssigneeMap[taskName]) taskAssigneeMap[taskName] = new Set();
+        taskAssigneeMap[taskName].add(memberId);
+      });
+    });
+    const updated = allDailyTasks.map(t => {
+      if (t.date !== date) return t;
+      if (t.taskName === BREAK_TASK_NAME) return t;
+      const assignedMembers = taskAssigneeMap[t.taskName];
+      if (!assignedMembers || assignedMembers.size === 0) return t;
+      if (t.assigneeId && assignedMembers.has(t.assigneeId)) return t;
+      let bestMember = '';
+      let bestCount = 0;
+      assignedMembers.forEach(mid => {
+        const blocks = result[mid] || {};
+        const count = Object.values(blocks).filter(tn => tn === t.taskName).length;
+        if (count > bestCount) { bestCount = count; bestMember = mid; }
+      });
+      return { ...t, assigneeId: bestMember || t.assigneeId };
+    });
+    setDailyTasks(updated);
+    setApplied(true);
+
+    // Check for unassigned tasks (warning only)
     const assignedTasks = new Set<string>();
     Object.values(result).forEach(mb => {
       Object.values(mb).forEach(tn => assignedTasks.add(tn));
