@@ -563,11 +563,133 @@ export function setMonthlySchedules(schedules: MonthlySchedule[]) {
   setToStorage(STORAGE_KEYS.monthlySchedules, schedules);
 }
 
+// ===== Shipping Records =====
+// 内部表現は配列、Firestore は { [id]: record } のオブジェクト形式（フィールドパス更新のため）
+// 旧データ（配列）も読めるよう両対応する。
+
 export function getShippingRecords(): ShippingRecord[] {
-  return getFromStorage(STORAGE_KEYS.shippingRecords, []);
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_KEYS.shippingRecords);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed as ShippingRecord[];
+    if (parsed && typeof parsed === 'object') {
+      return Object.values(parsed as Record<string, ShippingRecord>);
+    }
+    return [];
+  } catch {
+    return [];
+  }
 }
+
+// レガシー：配列全体上書き（緊急用、通常は使わない）
 export function setShippingRecords(records: ShippingRecord[]) {
   setToStorage(STORAGE_KEYS.shippingRecords, records);
+}
+
+// 配列 → Firestore オブジェクト形式に変換するヘルパー
+function shippingArrayToObject(records: ShippingRecord[]): Record<string, ShippingRecord> {
+  const obj: Record<string, ShippingRecord> = {};
+  for (const r of records) {
+    if (r && r.id) obj[r.id] = r;
+  }
+  return obj;
+}
+
+// ⭐ レース無し追加：自分の新レコードだけを Firestore に部分更新
+export async function addShippingRecord(record: ShippingRecord): Promise<void> {
+  if (!record || !record.id) throw new Error('addShippingRecord: invalid record');
+  // 1) localStorage 更新
+  const all = getShippingRecords();
+  const updated = [...all.filter(r => r.id !== record.id), record];
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.shippingRecords, JSON.stringify(updated));
+  }
+  // 2) Firestore はフィールドパスで自分のレコードだけ書込み
+  try {
+    await updateDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      [`value.${record.id}`]: record,
+      updatedAt: Date.now(),
+    });
+  } catch {
+    // ドキュメント未存在 or 配列形式の場合のみフォールバック（オブジェクト形式に移行）
+    await setDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      value: shippingArrayToObject(updated),
+      updatedAt: Date.now(),
+    });
+  }
+}
+
+// ⭐ レース無し更新：自分の編集対象レコードだけを部分更新
+export async function updateShippingRecord(record: ShippingRecord): Promise<void> {
+  if (!record || !record.id) throw new Error('updateShippingRecord: invalid record');
+  const all = getShippingRecords();
+  const updated = all.map(r => r.id === record.id ? record : r);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.shippingRecords, JSON.stringify(updated));
+  }
+  try {
+    await updateDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      [`value.${record.id}`]: record,
+      updatedAt: Date.now(),
+    });
+  } catch {
+    await setDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      value: shippingArrayToObject(updated),
+      updatedAt: Date.now(),
+    });
+  }
+}
+
+// ⭐ レース無し削除：自分の削除対象レコードだけを Firestore から削除
+export async function deleteShippingRecord(id: string): Promise<void> {
+  if (!id) throw new Error('deleteShippingRecord: invalid id');
+  const all = getShippingRecords();
+  const updated = all.filter(r => r.id !== id);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.shippingRecords, JSON.stringify(updated));
+  }
+  try {
+    const { deleteField } = await import('firebase/firestore');
+    await updateDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      [`value.${id}`]: deleteField(),
+      updatedAt: Date.now(),
+    });
+  } catch {
+    await setDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      value: shippingArrayToObject(updated),
+      updatedAt: Date.now(),
+    });
+  }
+}
+
+// ⭐ 一括更新：持ち越し処理で「複数追加+複数削除」を原子的に実施
+export async function bulkUpdateShippingRecords(
+  toAdd: ShippingRecord[],
+  toDeleteIds: string[],
+): Promise<void> {
+  const all = getShippingRecords();
+  const updated = all.filter(r => !toDeleteIds.includes(r.id)).concat(toAdd);
+  if (typeof window !== 'undefined') {
+    localStorage.setItem(STORAGE_KEYS.shippingRecords, JSON.stringify(updated));
+  }
+  try {
+    const { deleteField } = await import('firebase/firestore');
+    const updates: Record<string, unknown> = { updatedAt: Date.now() };
+    for (const r of toAdd) {
+      if (r && r.id) updates[`value.${r.id}`] = r;
+    }
+    for (const id of toDeleteIds) {
+      if (id) updates[`value.${id}`] = deleteField();
+    }
+    await updateDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), updates);
+  } catch {
+    await setDoc(doc(db, 'appData', STORAGE_KEYS.shippingRecords), {
+      value: shippingArrayToObject(updated),
+      updatedAt: Date.now(),
+    });
+  }
 }
 
 export function getShifts(): ShiftEntry[] {

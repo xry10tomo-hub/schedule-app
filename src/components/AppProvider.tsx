@@ -251,6 +251,12 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       STORAGE_KEYS.actualPerformance,
       STORAGE_KEYS.actualTimeline,
     ]);
+    // Keyed-by-id object stores in Firestore (each PC owns different record IDs).
+    // 受信時はオブジェクト → 配列に変換して localStorage に保存し、
+    // 既存のローカル配列と mergeArraysById で統合する。
+    const KEYED_OBJECT_KEYS = new Set<string>([
+      STORAGE_KEYS.shippingRecords,
+    ]);
 
     const unsubs = [...SYNC_KEYS].map(key =>
       onSnapshot(doc(db, 'appData', key), (snap) => {
@@ -262,6 +268,34 @@ export default function AppProvider({ children }: { children: React.ReactNode })
 
         const remoteData = snap.data().value;
         const localRaw = localStorage.getItem(key);
+
+        // Keyed-by-id object format (e.g., schedule_shipping)
+        // Firestore stores as { [id]: record }, local stores as array.
+        // 受信時：オブジェクト→配列に変換、ローカルとマージ
+        if (KEYED_OBJECT_KEYS.has(key)) {
+          let localArray: unknown[] = [];
+          try {
+            const parsed = localRaw ? JSON.parse(localRaw) : [];
+            if (Array.isArray(parsed)) localArray = parsed;
+            else if (parsed && typeof parsed === 'object') localArray = Object.values(parsed);
+          } catch { localArray = []; }
+
+          let remoteArray: unknown[] = [];
+          if (Array.isArray(remoteData)) {
+            remoteArray = remoteData;
+          } else if (remoteData && typeof remoteData === 'object') {
+            remoteArray = Object.values(remoteData as Record<string, unknown>);
+          }
+
+          const merged = mergeArraysById(localArray, remoteArray);
+          const finalArray = merged ?? remoteArray;
+          const finalStr = JSON.stringify(finalArray);
+          if (finalStr !== localRaw) {
+            localStorage.setItem(key, finalStr);
+            setDataVersion(v => v + 1);
+          }
+          return;
+        }
 
         if (PER_USER_NESTED_KEYS.has(key)) {
           // Per-user nested data: deep-merge to preserve concurrent edits across users

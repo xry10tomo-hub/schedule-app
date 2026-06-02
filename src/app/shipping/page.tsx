@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import DashboardLayout from '@/components/DashboardLayout';
 import NumberInput from '@/components/NumberInput';
-import { useAppContext, getShippingRecords, setShippingRecords, getDailyTasks, getActualPerformanceForDate, setActualPerformanceForDate, generateId, exportToCSV, fmtNum } from '@/lib/store';
+import { useAppContext, getShippingRecords, addShippingRecord, updateShippingRecord, deleteShippingRecord, bulkUpdateShippingRecords, getDailyTasks, getActualPerformanceForDate, updateMyActualPerformanceEntry, generateId, exportToCSV, fmtNum } from '@/lib/store';
 import type { ActualPerformanceEntry } from '@/lib/store';
 import type { ShippingRecord } from '@/lib/types';
 
@@ -65,17 +65,18 @@ export default function ShippingPage() {
       carriedOver: true,
       carriedFromId: r.id,
     }));
-    const idsToRemove = new Set(toCarry.map(r => r.id));
-    const updated = all.filter(r => !idsToRemove.has(r.id)).concat(toAdd);
-    setShippingRecords(updated);
-    console.log(`[Shipping] Auto-carried ${toAdd.length} records: ${prevDateStr} → ${selectedDate}`);
+    const idsToRemove = toCarry.map(r => r.id);
+    // フィールドパスで原子的に追加+削除（他PCの同時操作と競合しない）
+    bulkUpdateShippingRecords(toAdd, idsToRemove)
+      .then(() => console.log(`[Shipping] Auto-carried ${toAdd.length} records: ${prevDateStr} → ${selectedDate}`))
+      .catch(err => console.error('[Shipping] auto-carry error:', err));
   }, [selectedDate, dataVersion]);
 
   // Sync shipping creators to home performance data for 【査定】計算書作成
+  // ⭐ updateMyActualPerformanceEntry でメンバー単位のフィールドパス更新 → 他人のデータには触れない
   function syncCreatorToPerformance() {
     const allRecords = getShippingRecords().filter(r => r.date === selectedDate);
     const perfData = getActualPerformanceForDate(selectedDate);
-    const newPerfData = { ...perfData };
 
     // Count points per creator (by member name -> find member id)
     const creatorPoints: Record<string, { count: number; points: number }> = {};
@@ -88,32 +89,47 @@ export default function ShippingPage() {
       creatorPoints[member.id].points += r.points;
     });
 
-    // Update performance data for 【査定】計算書作成
     const taskName = '【査定】計算書作成';
+
+    // 該当メンバーごとに個別更新（field-pathで他人を触らない）
     for (const [memberId, data] of Object.entries(creatorPoints)) {
-      if (!newPerfData[memberId]) newPerfData[memberId] = {};
-      newPerfData[memberId][taskName] = { count: data.count, points: data.points };
+      const existing = perfData[memberId]?.[taskName] || { count: 0, points: 0 };
+      const updated = { ...existing, count: data.count, points: data.points };
+      updateMyActualPerformanceEntry(selectedDate, memberId, taskName, updated)
+        .catch(err => console.error('[Shipping] syncCreatorToPerformance error:', err));
     }
 
-    // Clear data for members who no longer have records
+    // 作成者から外れたメンバーは 0 にリセット
     members.forEach(m => {
-      if (!creatorPoints[m.id] && newPerfData[m.id]?.[taskName]) {
-        newPerfData[m.id][taskName] = { count: 0, points: 0 };
+      if (!creatorPoints[m.id] && perfData[m.id]?.[taskName]) {
+        const existing = perfData[m.id]?.[taskName];
+        if (existing && (existing.count > 0 || existing.points > 0)) {
+          const reset = { ...existing, count: 0, points: 0 };
+          updateMyActualPerformanceEntry(selectedDate, m.id, taskName, reset)
+            .catch(err => console.error('[Shipping] syncCreatorToPerformance reset error:', err));
+        }
       }
     });
-
-    setActualPerformanceForDate(selectedDate, newPerfData);
   }
 
   // ===== Inline row helpers =====
+  // すべて Firestore のフィールドパス更新（updateDoc）経由で保存
+  // → 他PCの同時操作と一切競合しない（他人のレコードに触れない）
   function updateRecord(id: string, patch: Partial<ShippingRecord>) {
-    const all = getShippingRecords().map(r => r.id === id ? { ...r, ...patch } : r);
-    setShippingRecords(all);
-    loadRecords();
-    if ('creator' in patch) {
-      // Need small delay to ensure records are saved first
-      setTimeout(() => syncCreatorToPerformance(), 50);
-    }
+    const existing = getShippingRecords().find(r => r.id === id);
+    if (!existing) return;
+    const updated: ShippingRecord = { ...existing, ...patch };
+    updateShippingRecord(updated)
+      .then(() => {
+        loadRecords();
+        if ('creator' in patch) {
+          setTimeout(() => syncCreatorToPerformance(), 50);
+        }
+      })
+      .catch(err => {
+        console.error('[Shipping] updateRecord error:', err);
+        alert('保存に失敗しました。ネットワークを確認してください。');
+      });
   }
 
   function addRow() {
@@ -129,8 +145,12 @@ export default function ShippingPage() {
       creator: '',
       createdAt: new Date().toISOString(),
     };
-    setShippingRecords([...getShippingRecords(), newRecord]);
-    loadRecords();
+    addShippingRecord(newRecord)
+      .then(() => loadRecords())
+      .catch(err => {
+        console.error('[Shipping] addRow error:', err);
+        alert('レコードの追加に失敗しました。');
+      });
   }
 
   function copyRow(source: ShippingRecord) {
@@ -139,13 +159,21 @@ export default function ShippingPage() {
       id: generateId(),
       createdAt: new Date().toISOString(),
     };
-    setShippingRecords([...getShippingRecords(), newRecord]);
-    loadRecords();
+    addShippingRecord(newRecord)
+      .then(() => loadRecords())
+      .catch(err => {
+        console.error('[Shipping] copyRow error:', err);
+        alert('レコードのコピーに失敗しました。');
+      });
   }
 
   function handleDelete(id: string) {
-    setShippingRecords(getShippingRecords().filter(r => r.id !== id));
-    loadRecords();
+    deleteShippingRecord(id)
+      .then(() => loadRecords())
+      .catch(err => {
+        console.error('[Shipping] handleDelete error:', err);
+        alert('レコードの削除に失敗しました。');
+      });
   }
 
   function handleExportCSV() {
