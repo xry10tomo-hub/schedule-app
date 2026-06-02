@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useAppContext, logout } from '@/lib/store';
 
 const NAV_ITEMS = [
   { href: '/home', label: 'ホーム', icon: '📊' },
@@ -17,8 +18,18 @@ const NAV_ITEMS = [
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { currentUserId, setCurrentUserId, members } = useAppContext();
+  const currentMember = members.find(m => m.id === currentUserId);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  function handleLogout() {
+    if (!confirm('ログアウトしますか？\n（業務データは削除されません）')) return;
+    logout();
+    setCurrentUserId('');
+    router.push('/login');
+  }
 
   return (
     <>
@@ -95,10 +106,43 @@ export default function Sidebar() {
           })}
         </nav>
 
-        {/* Footer */}
-        <div className="px-4 py-3 border-t border-green-700">
+        {/* Footer: current user + logout */}
+        <div className="px-3 py-3 border-t border-green-700 space-y-2">
+          {currentMember && (
+            <div className={`flex items-center gap-2 ${collapsed ? 'justify-center' : 'px-2 py-1.5 bg-green-700/50 rounded-lg'}`}>
+              <div className={`flex items-center justify-center rounded-full text-white font-bold ${
+                collapsed ? 'w-8 h-8 text-xs' : 'w-7 h-7 text-xs'
+              } ${currentMember.role === 'employee' ? 'bg-green-500' : 'bg-blue-500'}`}>
+                {currentMember.name.charAt(0)}
+              </div>
+              {!collapsed && (
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-bold text-white truncate">{currentMember.name}</p>
+                  <p className="text-[10px] text-green-300">
+                    {currentMember.role === 'employee' ? '社員' : 'アルバイト'}
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          {currentUserId && (
+            <button
+              onClick={handleLogout}
+              className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-colors bg-red-600/80 hover:bg-red-600 text-white ${
+                collapsed ? 'justify-center' : ''
+              }`}
+              title="ログアウト"
+            >
+              <svg width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+                <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+                <polyline points="16 17 21 12 16 7" />
+                <line x1="21" y1="12" x2="9" y2="12" />
+              </svg>
+              {!collapsed && <span>ログアウト</span>}
+            </button>
+          )}
           {!collapsed && (
-            <p className="text-xs text-green-400">v1.0 Schedule Manager</p>
+            <p className="text-[10px] text-green-400 text-center">v1.0 Schedule Manager</p>
           )}
         </div>
       </aside>

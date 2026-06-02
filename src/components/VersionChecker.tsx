@@ -2,8 +2,9 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-const CHECK_INTERVAL_MS = 60_000; // Check every 60 seconds
-const IDLE_THRESHOLD_MS = 15_000; // Consider user idle after 15s of no input
+const CHECK_INTERVAL_MS = 30_000; // Check every 30 seconds (faster detection)
+const IDLE_THRESHOLD_MS = 5_000;   // Consider user idle after 5s of no input (more aggressive)
+const FORCE_RELOAD_DELAY_MS = 10_000; // After detecting new version, hard-reload within 10s no matter what
 
 export default function VersionChecker() {
   const initialVersionRef = useRef<string | null>(null);
@@ -85,6 +86,13 @@ export default function VersionChecker() {
         setShowBanner(true);
         // Try immediate reload if user is idle
         tryReload();
+        // STRONG FORCE: 何があっても 10秒後に強制リロード（入力中でも実施）
+        setTimeout(() => {
+          if (!reloadingRef.current) {
+            reloadingRef.current = true;
+            window.location.reload();
+          }
+        }, FORCE_RELOAD_DELAY_MS);
       }
     }
 
@@ -119,18 +127,25 @@ export default function VersionChecker() {
   if (!showBanner) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 z-[10000] max-w-sm bg-blue-600 text-white rounded-xl shadow-2xl p-3 flex items-center gap-3 animate-fade-in">
-      <span className="text-xl">🔄</span>
-      <div className="flex-1">
-        <p className="text-xs font-bold">新バージョンを取得しました</p>
-        <p className="text-[10px] text-blue-100">操作が止まると自動で更新されます</p>
+    <div className="fixed inset-0 z-[10000] bg-black/70 flex items-center justify-center p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl shadow-2xl p-6 max-w-md w-full text-center border-4 border-red-500">
+        <div className="text-5xl mb-3">🔄</div>
+        <h2 className="text-xl font-bold text-red-700 mb-2">新しいバージョンが公開されました</h2>
+        <p className="text-sm text-gray-700 mb-4">
+          他メンバーとの実績データを正しく共有するため、<br />
+          <strong>今すぐ画面を更新してください</strong>。
+        </p>
+        <p className="text-xs text-gray-500 mb-4">
+          10秒以内に自動で更新されます。<br />
+          下のボタンを押せばすぐに更新できます。
+        </p>
+        <button
+          onClick={() => window.location.reload()}
+          className="bg-red-600 hover:bg-red-700 text-white font-bold px-8 py-3 rounded-lg text-base w-full"
+        >
+          今すぐ更新する
+        </button>
       </div>
-      <button
-        onClick={() => window.location.reload()}
-        className="bg-white text-blue-700 text-xs font-bold px-3 py-1.5 rounded hover:bg-blue-50"
-      >
-        今すぐ更新
-      </button>
     </div>
   );
 }

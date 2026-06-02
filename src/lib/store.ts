@@ -887,6 +887,17 @@ export function getCurrentUser(): string {
 export function setCurrentUser(userId: string) {
   setToStorage(STORAGE_KEYS.currentUser, userId);
 }
+// ログアウト：現在ユーザー情報のみを削除（業務データには一切触れない）
+// 削除対象: schedule_current_user のみ
+// 削除しない: actualPerformance / actualTimeline / shipping / dailyTasks / timeline / members 等
+export function logout(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(STORAGE_KEYS.currentUser);
+  } catch {
+    /* ignore */
+  }
+}
 
 // ============ Helper Utilities ============
 

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { AppContext, getMembers, getCurrentUser, setCurrentUser, getToday, DEFAULT_MEMBERS, DEFAULT_TASKS, DEFAULT_TASK_RESOURCES, STORAGE_KEYS, SYNC_KEYS, setFirestoreSyncReady, performUndo, runTaskMigration } from '@/lib/store';
 
 // Deep-merge two nested objects. LOCAL wins at every leaf (local data is assumed to be newer).
@@ -105,6 +105,7 @@ async function writeBackPerUserDiff(
 
 export default function AppProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [currentUserId, setCurrentUserIdState] = useState('');
   const [members, setMembersState] = useState<Member[]>(DEFAULT_MEMBERS);
   const [dataVersion, setDataVersion] = useState(0);
@@ -122,6 +123,16 @@ export default function AppProvider({ children }: { children: React.ReactNode })
       }
     } catch { /* ignore */ }
   }, []);
+
+  // Auth guard: 未ログイン時は /login へ遷移（/login と / は例外）
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const userId = getCurrentUser();
+    const isAuthPage = pathname === '/login' || pathname === '/';
+    if (!userId && !isAuthPage) {
+      router.push('/login');
+    }
+  }, [pathname, currentUserId, router]);
 
   useEffect(() => {
     setCurrentUserIdState(getCurrentUser());
