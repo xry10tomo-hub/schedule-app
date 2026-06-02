@@ -113,23 +113,22 @@ export default function ShippingPage() {
   }
 
   // ===== Inline row helpers =====
-  // すべて Firestore のフィールドパス更新（updateDoc）経由で保存
-  // → 他PCの同時操作と一切競合しない（他人のレコードに触れない）
+  // 楽観的更新: localStorage は同期で即更新 → 画面も即反映
+  //          Firestore 同期は非同期（バックグラウンド）で実施
   function updateRecord(id: string, patch: Partial<ShippingRecord>) {
     const existing = getShippingRecords().find(r => r.id === id);
     if (!existing) return;
     const updated: ShippingRecord = { ...existing, ...patch };
-    updateShippingRecord(updated)
-      .then(() => {
-        loadRecords();
-        if ('creator' in patch) {
-          setTimeout(() => syncCreatorToPerformance(), 50);
-        }
-      })
-      .catch(err => {
-        console.error('[Shipping] updateRecord error:', err);
-        alert('保存に失敗しました。ネットワークを確認してください。');
-      });
+    // 非同期で Firestore へ（localStorage は updateShippingRecord 内で同期更新済み）
+    updateShippingRecord(updated).catch(err => {
+      console.error('[Shipping] updateRecord error:', err);
+      alert('保存に失敗しました。ネットワークを確認してください。');
+    });
+    // 即座に画面更新（localStorage はすでに更新済み）
+    loadRecords();
+    if ('creator' in patch) {
+      setTimeout(() => syncCreatorToPerformance(), 50);
+    }
   }
 
   function addRow() {
@@ -145,12 +144,11 @@ export default function ShippingPage() {
       creator: '',
       createdAt: new Date().toISOString(),
     };
-    addShippingRecord(newRecord)
-      .then(() => loadRecords())
-      .catch(err => {
-        console.error('[Shipping] addRow error:', err);
-        alert('レコードの追加に失敗しました。');
-      });
+    addShippingRecord(newRecord).catch(err => {
+      console.error('[Shipping] addRow error:', err);
+      alert('レコードの追加に失敗しました。');
+    });
+    loadRecords();
   }
 
   function copyRow(source: ShippingRecord) {
@@ -159,21 +157,19 @@ export default function ShippingPage() {
       id: generateId(),
       createdAt: new Date().toISOString(),
     };
-    addShippingRecord(newRecord)
-      .then(() => loadRecords())
-      .catch(err => {
-        console.error('[Shipping] copyRow error:', err);
-        alert('レコードのコピーに失敗しました。');
-      });
+    addShippingRecord(newRecord).catch(err => {
+      console.error('[Shipping] copyRow error:', err);
+      alert('レコードのコピーに失敗しました。');
+    });
+    loadRecords();
   }
 
   function handleDelete(id: string) {
-    deleteShippingRecord(id)
-      .then(() => loadRecords())
-      .catch(err => {
-        console.error('[Shipping] handleDelete error:', err);
-        alert('レコードの削除に失敗しました。');
-      });
+    deleteShippingRecord(id).catch(err => {
+      console.error('[Shipping] handleDelete error:', err);
+      alert('レコードの削除に失敗しました。');
+    });
+    loadRecords();
   }
 
   function handleExportCSV() {
