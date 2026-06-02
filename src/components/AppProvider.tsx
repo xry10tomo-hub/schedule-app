@@ -20,6 +20,38 @@ function mergeNestedObjects(localData: unknown, remoteData: unknown): unknown {
   return result;
 }
 
+// ⭐ REMOTE優位マージ: Firestoreを真とし、Local-only エントリだけ救済する
+// PER_USER_NESTED_KEYS (actualPerformance, actualTimeline) で使用。
+// - リモートにあるリーフはリモート値を採用（古いローカルで上書きしない）
+// - ローカルにしかないリーフのみ追加（オフライン編集の救済）
+function mergeRemoteWins(localData: unknown, remoteData: unknown): unknown {
+  // remote が非オブジェクト → remote を採用
+  if (typeof remoteData !== 'object' || remoteData === null || Array.isArray(remoteData)) {
+    return remoteData;
+  }
+  // local が非オブジェクト → remote を採用
+  if (typeof localData !== 'object' || localData === null || Array.isArray(localData)) {
+    return remoteData;
+  }
+  const remoteObj = remoteData as Record<string, unknown>;
+  const localObj = localData as Record<string, unknown>;
+  const result: Record<string, unknown> = { ...remoteObj }; // remote が起点
+  for (const [key, localVal] of Object.entries(localObj)) {
+    if (!(key in remoteObj)) {
+      // remote に無い → local エントリ救済
+      result[key] = localVal;
+    } else if (
+      typeof localVal === 'object' && localVal !== null && !Array.isArray(localVal) &&
+      typeof remoteObj[key] === 'object' && remoteObj[key] !== null && !Array.isArray(remoteObj[key])
+    ) {
+      // 両方オブジェクト → 再帰
+      result[key] = mergeRemoteWins(localVal, remoteObj[key]);
+    }
+    // それ以外 (leaf 衝突) → remote を維持
+  }
+  return result;
+}
+
 // Merge two arrays of records by `id`. Returns null if either side is not an array of objects with id.
 // On collision (same id in both), prefers the LOCAL record (assumed to be a more recent edit).
 // This recovers local-only records that haven't been synced yet, while preserving Firestore's complete dataset.
@@ -169,10 +201,27 @@ export default function AppProvider({ children }: { children: React.ReactNode })
                 }
                 localStorage.setItem(key, JSON.stringify(merged));
                 if (key === STORAGE_KEYS.members) setMembersState(merged as Member[]);
+              } else if (
+                key === STORAGE_KEYS.actualPerformance ||
+                key === STORAGE_KEYS.actualTimeline
+              ) {
+                // ⭐ PER_USER ネストデータ: REMOTE 優位マージ + フィールドパス追加のみ
+                // 旧バグ: ローカル優位マージ → setDoc 全体上書き で Firestore を古い状態に巻き戻していた
+                // 新仕様: Firestore を真とし、Local-only エントリだけ追加する
+                const merged = mergeRemoteWins(localData, remoteData);
+                localStorage.setItem(key, JSON.stringify(merged));
+                // local-only リーフだけを差分検出してフィールドパスで追加
+                const localOnly = buildPerUserFieldUpdates(merged, remoteData);
+                if (Object.keys(localOnly).length > 0) {
+                  console.log(`[Firestore] Adding ${Object.keys(localOnly).length} local-only fields for "${key}"`);
+                  await updateDoc(doc(db, 'appData', key), {
+                    ...localOnly,
+                    updatedAt: Date.now(),
+                  }).catch(err => console.warn(`[Firestore] initFirestore field-update failed for "${key}":`, err));
+                }
               } else {
-                // Nested-object stores (timeline / actualTimeline / actualPerformance / taskAssignments /
-                // fixedTaskDefaults etc.) → deep-merge so locally-written data is never overwritten
-                // by a race with concurrent Firestore sync. Local values win on key collision.
+                // それ以外のネストオブジェクト (timeline / taskAssignments / fixedTaskDefaults 等)
+                // → 既存方式（ローカル優位）を維持。これらはユーザー単位の競合がほぼ無いため。
                 const deepMerged = mergeNestedObjects(localData, remoteData);
                 localStorage.setItem(key, JSON.stringify(deepMerged));
                 await setDoc(doc(db, 'appData', key), { value: deepMerged, updatedAt: Date.now() });
@@ -298,19 +347,20 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         }
 
         if (PER_USER_NESTED_KEYS.has(key)) {
-          // Per-user nested data: deep-merge to preserve concurrent edits across users
+          // ⭐ REMOTE 優位マージ: Firestore を真とし、Local-only エントリだけ救済
+          // 旧バグ: ローカル優位 → 古い localStorage で Firestore の新データを上書き
+          // 新仕様: リモートのリーフはリモート値を採用、ローカルのみ存在するキーだけ追加
           let localData: unknown = null;
           try { localData = localRaw ? JSON.parse(localRaw) : null; } catch { localData = null; }
-          const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
+          const merged = localData ? mergeRemoteWins(localData, remoteData) : remoteData;
           const mergedStr = JSON.stringify(merged);
           const remoteStr = JSON.stringify(remoteData);
           if (mergedStr !== localRaw) {
             localStorage.setItem(key, mergedStr);
             setDataVersion(v => v + 1);
           }
-          // BUG FIX: If merge produced data beyond what's on remote (= local had unique entries
-          // that Firestore lost in a previous race), push only the differing field-paths so other
-          // users' data is NEVER touched. updateDoc with dot-notation paths guarantees per-leaf isolation.
+          // Local-only エントリ（Firestore に存在しない自分のオフライン編集）のみ書き戻し
+          // merge は REMOTE 優位なので、merged !== remote の場合は必ず Local-only リーフが存在する
           if (mergedStr !== remoteStr) {
             writeBackPerUserDiff(key, merged, remoteData)
               .catch(err => console.warn(`[Firestore] write-back diff failed for "${key}":`, err));
@@ -356,15 +406,15 @@ export default function AppProvider({ children }: { children: React.ReactNode })
         }
 
         if (PER_USER_NESTED_KEYS.has(key)) {
-          const merged = localData ? mergeNestedObjects(localData, remoteData) : remoteData;
+          // ⭐ REMOTE 優位マージ: Firestore を真とし、Local-only エントリだけ救済
+          const merged = localData ? mergeRemoteWins(localData, remoteData) : remoteData;
           const mergedStr = JSON.stringify(merged);
           const remoteStr = JSON.stringify(remoteData);
           if (mergedStr !== localRaw) {
             localStorage.setItem(key, mergedStr);
             changed = true;
           }
-          // BUG FIX: write merged back to Firestore so it converges to the union of all PCs' edits.
-          // 差分のみフィールドパスで更新 → 他人のデータには絶対に触れない。
+          // Local-only エントリのみフィールドパスで追加（他人のデータには触れない）
           if (mergedStr !== remoteStr) {
             await writeBackPerUserDiff(key, merged, remoteData);
           }
